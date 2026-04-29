@@ -1,9 +1,13 @@
+// Modified from the original cc-mascot project by kazakago.
+// Original: https://github.com/kazakago/cc-mascot (Apache License 2.0)
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, shell, Tray } from "electron";
 import path from "path";
 import { fileURLToPath } from "url";
 import { spawn, execSync, ChildProcess } from "child_process";
 import { createLogMonitor } from "./logMonitor";
-import { createActiveSessionMonitor, clearActiveSessionFile } from "./activeSessionMonitor";
+import { createCodexLogMonitor } from "./codexLogMonitor";
+import { createClaudeSettingsMonitor } from "./services/claudeSettingsMonitor";
+import { sendWebhookNotification, type WebhookService } from "./services/webhookNotifier";
 import { initAutoUpdater, checkForUpdatesManually } from "./autoUpdater";
 import fs from "fs";
 import net from "net";
@@ -32,13 +36,15 @@ const store = new Store();
 let mainWindow: BrowserWindow | null = null;
 let licenseWindow: BrowserWindow | null = null;
 let logMonitor: { close: () => void } | null = null;
-let activeSessionMonitor: { close: () => void } | null = null;
+let codexLogMonitor: { resetActiveFile: () => void; close: () => void } | null = null;
+let settingsMonitor: { isToolAllowed: (name: string) => boolean; close: () => void } | null = null;
 let activeSessionId: string | null = null;
+let activeCodexFilePath: string | null = null;
 let voicevoxProcess: ChildProcess | null = null;
 let micMonitorProcess: ChildProcess | null = null;
 let micActive = false;
 let tray: Tray | null = null;
-let isCharacterVisible = true;
+let notificationMode: string = (store.get("notificationMode") as string | undefined) ?? "both";
 
 const VOICEVOX_PORT = 8564;
 
@@ -50,6 +56,12 @@ function startLogMonitor(): void {
     logMonitor = null;
   }
 
+  // Reset session filter so auto-detection starts fresh
+  activeSessionId = null;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("active-session-changed", null);
+  }
+
   // Initialize log monitor with IPC broadcast function
   const broadcast = (message: string) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -57,9 +69,48 @@ function startLogMonitor(): void {
     }
   };
 
+  const onAutoDetectSession = (sessionId: string) => {
+    activeSessionId = sessionId;
+    console.log(`[ActiveSession] Auto-detected session: ${sessionId}`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("active-session-changed", sessionId);
+    }
+  };
+
   const includeSubAgents = (store.get("includeSubAgents") as boolean | undefined) ?? false;
-  console.log(`[LogMonitor] Starting with includeSubAgents=${includeSubAgents}`);
-  logMonitor = createLogMonitor(broadcast, includeSubAgents, () => activeSessionId);
+  const watchPath = (store.get("watchPath") as string | undefined) || undefined;
+  console.log(`[LogMonitor] Starting with includeSubAgents=${includeSubAgents}, watchPath=${watchPath ?? "default"}`);
+  logMonitor = createLogMonitor(broadcast, includeSubAgents, () => activeSessionId, watchPath, settingsMonitor?.isToolAllowed, onAutoDetectSession);
+}
+
+function startCodexLogMonitor(): void {
+  if (codexLogMonitor) {
+    codexLogMonitor.close();
+    codexLogMonitor = null;
+  }
+
+  activeCodexFilePath = null;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("codex-active-file-changed", null);
+  }
+
+  const broadcast = (message: string) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("speak", message);
+    }
+  };
+
+  const onActiveFileChanged = (filePath: string | null) => {
+    activeCodexFilePath = filePath;
+    console.log(`[CodexMonitor] Active file: ${filePath ?? "none"}`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("codex-active-file-changed", filePath);
+    }
+  };
+
+  const codexWatchPath = (store.get("codexWatchPath") as string | undefined) || undefined;
+  console.log(`[CodexMonitor] Starting with codexWatchPath=${codexWatchPath ?? "default"}`);
+  codexLogMonitor = createCodexLogMonitor(broadcast, codexWatchPath, onActiveFileChanged);
 }
 
 // Get mic-monitor binary path
@@ -177,21 +228,46 @@ const getTrayIconPath = (): string => {
   return path.join(iconsDir, ext);
 };
 
-// Update tray context menu (called when visibility state changes)
+// Update tray context menu (called when notification mode changes)
 const updateTrayMenu = () => {
   if (!tray) return;
 
   const contextMenu = Menu.buildFromTemplate([
+    { label: "通知モード", enabled: false },
     {
-      label: isCharacterVisible ? "キャラクターを隠す" : "キャラクターを表示する",
+      label: "両方（ポップアップ + 発話）",
+      type: "radio",
+      checked: notificationMode === "both",
       click: () => {
-        isCharacterVisible = !isCharacterVisible;
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("toggle-character-visibility", isCharacterVisible);
-        }
+        notificationMode = "both";
+        store.set("notificationMode", "both");
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("notification-mode-changed", "both");
         updateTrayMenu();
       },
     },
+    {
+      label: "ポップアップのみ",
+      type: "radio",
+      checked: notificationMode === "visual",
+      click: () => {
+        notificationMode = "visual";
+        store.set("notificationMode", "visual");
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("notification-mode-changed", "visual");
+        updateTrayMenu();
+      },
+    },
+    {
+      label: "発話のみ",
+      type: "radio",
+      checked: notificationMode === "audio",
+      click: () => {
+        notificationMode = "audio";
+        store.set("notificationMode", "audio");
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("notification-mode-changed", "audio");
+        updateTrayMenu();
+      },
+    },
+    { type: "separator" },
     {
       label: "設定を開く",
       click: () => {
@@ -206,8 +282,8 @@ const updateTrayMenu = () => {
       click: async () => {
         const { response } = await dialog.showMessageBox(mainWindow!, {
           type: "info",
-          title: "CC Mascot",
-          message: `CC Mascot v${app.getVersion()}`,
+          title: "LLM Notificator",
+          message: `LLM Notificator v${app.getVersion()}`,
           detail: [
             `Electron: v${process.versions.electron}`,
             `Chrome: v${process.versions.chrome}`,
@@ -218,7 +294,7 @@ const updateTrayMenu = () => {
         if (response === 1) {
           checkForUpdatesManually();
         } else if (response === 2) {
-          shell.openExternal("https://kazakago.github.io/cc-mascot/");
+          shell.openExternal("https://github.com/R2P2086/LLM-Notificator");
         } else if (response === 3) {
           createLicenseWindow();
         }
@@ -237,7 +313,7 @@ const updateTrayMenu = () => {
 const createTray = () => {
   const icon = nativeImage.createFromPath(getTrayIconPath());
   tray = new Tray(icon);
-  tray.setToolTip("CC Mascot");
+  tray.setToolTip("LLM Notificator");
   updateTrayMenu();
 };
 
@@ -778,16 +854,15 @@ ipcMain.handle("reset-engine-settings", async () => {
 
 // Get current character size from Electron Store
 ipcMain.handle("get-character-size", () => {
-  return (store.get("characterSize") as number) || 800;
+  return (store.get("characterSize") as number) || 200;
 });
 
-// Debounce timers for disk persistence during rapid slider/drag events
+// Debounce timer for disk persistence during rapid slider events
 let characterSizeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-let characterPositionDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Set character size with validation
 ipcMain.handle("set-character-size", (_event, size: number) => {
-  const clampedSize = Math.max(400, Math.min(1200, Math.round(size)));
+  const clampedSize = Math.max(80, Math.min(400, Math.round(size)));
 
   // Debounce disk persistence to avoid blocking main process during rapid slider events
   if (characterSizeDebounceTimer) clearTimeout(characterSizeDebounceTimer);
@@ -800,28 +875,9 @@ ipcMain.handle("set-character-size", (_event, size: number) => {
 
 // Reset character size to default
 ipcMain.handle("reset-character-size", () => {
-  const defaultSize = 800;
+  const defaultSize = 200;
   store.delete("characterSize");
   return defaultSize;
-});
-
-// Reset character position to default (center-bottom)
-ipcMain.handle("reset-character-position", () => {
-  store.delete("characterPosition");
-  return true;
-});
-
-// Character position persistence
-ipcMain.handle("get-character-position", () => {
-  return store.get("characterPosition") as { x: number; y: number } | undefined;
-});
-
-ipcMain.on("set-character-position", (_event, x: number, y: number) => {
-  // Debounce disk persistence to avoid blocking main process during rapid events
-  if (characterPositionDebounceTimer) clearTimeout(characterPositionDebounceTimer);
-  characterPositionDebounceTimer = setTimeout(() => {
-    store.set("characterPosition", { x, y });
-  }, 300);
 });
 
 // Screen size (returns the size of the display the window is currently on)
@@ -844,31 +900,40 @@ ipcMain.handle("get-active-session", () => {
 });
 
 ipcMain.handle("clear-active-session", () => {
-  clearActiveSessionFile();
+  activeSessionId = null;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("active-session-changed", null);
+  }
   return true;
 });
 
-// Reset all settings (including character size and position)
+// Reset all settings
 ipcMain.handle("reset-all-settings", async () => {
   store.delete("engineType");
   store.delete("voicevoxEnginePath");
   store.delete("characterSize");
-  store.delete("characterPosition");
   store.delete("muteOnMicActive");
   store.delete("includeSubAgents");
-  store.delete("enableIdleAnimations");
-  store.delete("enableSpeechAnimations");
   store.delete("speakerId");
   store.delete("volumeScale");
   store.delete("autoUpdateCheck");
+  store.delete("watchPath");
+  store.delete("codexWatchPath");
+  store.delete("notificationPhrases");
+  store.delete("popupPosition");
+  store.delete("popupAnimation");
+  store.delete("popupDirection");
+  store.delete("notificationMode");
+  store.delete("webhookService");
+  store.delete("webhookUrl");
   stopMicMonitor();
-  clearActiveSessionFile();
 
   await stopVoicevoxEngine();
   const started = await startVoicevoxEngine(true);
 
-  // Restart log monitor with default settings
+  // Restart log monitors with default settings
   startLogMonitor();
+  startCodexLogMonitor();
 
   return started;
 });
@@ -933,6 +998,55 @@ ipcMain.handle("set-include-sub-agents", (_event, value: boolean) => {
   return true;
 });
 
+ipcMain.handle("get-watch-path", () => {
+  return (store.get("watchPath") as string | undefined) ?? "";
+});
+
+ipcMain.handle("set-watch-path", (_event, watchPath: string) => {
+  if (watchPath.trim()) {
+    store.set("watchPath", watchPath.trim());
+  } else {
+    store.delete("watchPath");
+  }
+  console.log(`[IPC] watchPath set to "${watchPath.trim() || "default"}", restarting log monitor`);
+  startLogMonitor();
+  return true;
+});
+
+ipcMain.handle("get-codex-active-file", () => {
+  return activeCodexFilePath;
+});
+
+ipcMain.handle("clear-codex-active-file", () => {
+  codexLogMonitor?.resetActiveFile();
+  return true;
+});
+
+ipcMain.handle("get-codex-watch-path", () => {
+  return (store.get("codexWatchPath") as string | undefined) ?? "";
+});
+
+ipcMain.handle("set-codex-watch-path", (_event, codexWatchPath: string) => {
+  if (codexWatchPath.trim()) {
+    store.set("codexWatchPath", codexWatchPath.trim());
+  } else {
+    store.delete("codexWatchPath");
+  }
+  console.log(`[IPC] codexWatchPath set to "${codexWatchPath.trim() || "default"}", restarting Codex monitor`);
+  startCodexLogMonitor();
+  return true;
+});
+
+// Notification phrases
+ipcMain.handle("get-notification-phrases", () => {
+  return (store.get("notificationPhrases") as Record<string, string[]> | undefined) ?? null;
+});
+
+ipcMain.handle("set-notification-phrases", (_event, phrases: Record<string, string[]>) => {
+  store.set("notificationPhrases", phrases);
+  return true;
+});
+
 // Speaker settings
 ipcMain.handle("get-speaker-id", () => {
   return (store.get("speakerId") as number | undefined) ?? 888753760;
@@ -953,27 +1067,6 @@ ipcMain.handle("set-volume-scale", (_event, volume: number) => {
   return true;
 });
 
-// Motion settings
-ipcMain.handle("get-enable-idle-animations", () => {
-  const value = store.get("enableIdleAnimations");
-  return value === undefined ? true : (value as boolean);
-});
-
-ipcMain.handle("set-enable-idle-animations", (_event, value: boolean) => {
-  store.set("enableIdleAnimations", value);
-  return true;
-});
-
-ipcMain.handle("get-enable-speech-animations", () => {
-  const value = store.get("enableSpeechAnimations");
-  return value === undefined ? true : (value as boolean);
-});
-
-ipcMain.handle("set-enable-speech-animations", (_event, value: boolean) => {
-  store.set("enableSpeechAnimations", value);
-  return true;
-});
-
 ipcMain.handle("get-auto-update-check", () => {
   const value = store.get("autoUpdateCheck");
   return value === undefined ? true : (value as boolean);
@@ -984,52 +1077,68 @@ ipcMain.handle("set-auto-update-check", (_event, value: boolean) => {
   return true;
 });
 
-const ANIMATION_CATEGORIES = ["idle", "happy", "angry", "sad", "relaxed", "surprised"] as const;
+// Popup appearance settings
+ipcMain.handle("get-popup-position", () => {
+  return (store.get("popupPosition") as string | undefined) ?? "bottom-right";
+});
 
-ipcMain.handle("get-animation-manifest", () => {
-  const animationsDir = process.env.VITE_DEV_SERVER_URL
-    ? path.join(__dirname, "../public/animations")
-    : path.join(__dirname, "../dist/animations");
+ipcMain.handle("set-popup-position", (_event, value: string) => {
+  store.set("popupPosition", value);
+  return true;
+});
 
-  const manifest: {
-    idle_loop: string;
-    idle: string[];
-    emotions: Partial<Record<string, string[]>>;
-  } = {
-    idle_loop: "./animations/idle_loop.vrma",
-    idle: [],
-    emotions: {},
-  };
+ipcMain.handle("get-popup-animation", () => {
+  return (store.get("popupAnimation") as string | undefined) ?? "slide";
+});
 
-  for (const category of ANIMATION_CATEGORIES) {
-    const allPaths: string[] = [];
+ipcMain.handle("set-popup-animation", (_event, value: string) => {
+  store.set("popupAnimation", value);
+  return true;
+});
 
-    const publicCategoryDir = path.join(animationsDir, category);
-    if (fs.existsSync(publicCategoryDir)) {
-      const files = fs
-        .readdirSync(publicCategoryDir)
-        .filter((f) => f.endsWith(".vrma"))
-        .sort();
-      allPaths.push(...files.map((f) => `./animations/${category}/${f}`));
-    }
+ipcMain.handle("get-popup-direction", () => {
+  return (store.get("popupDirection") as string | undefined) ?? "primary";
+});
 
-    const proprietaryCategoryDir = path.join(animationsDir, "proprietary", category);
-    if (fs.existsSync(proprietaryCategoryDir)) {
-      const files = fs
-        .readdirSync(proprietaryCategoryDir)
-        .filter((f) => f.endsWith(".vrma"))
-        .sort();
-      allPaths.push(...files.map((f) => `./animations/proprietary/${category}/${f}`));
-    }
+ipcMain.handle("set-popup-direction", (_event, value: string) => {
+  store.set("popupDirection", value);
+  return true;
+});
 
-    if (category === "idle") {
-      manifest.idle = allPaths;
-    } else if (allPaths.length > 0) {
-      manifest.emotions[category] = allPaths;
-    }
-  }
+ipcMain.handle("get-notification-mode", () => {
+  return (store.get("notificationMode") as string | undefined) ?? "both";
+});
+ipcMain.handle("set-notification-mode", (_event, value: string) => {
+  store.set("notificationMode", value);
+  notificationMode = value;
+  updateTrayMenu();
+  return true;
+});
 
-  return manifest;
+// Webhook notification settings
+ipcMain.handle("get-webhook-service", () => {
+  return (store.get("webhookService") as string | undefined) ?? "none";
+});
+
+ipcMain.handle("set-webhook-service", (_event, value: string) => {
+  store.set("webhookService", value);
+  return true;
+});
+
+ipcMain.handle("get-webhook-url", () => {
+  return (store.get("webhookUrl") as string | undefined) ?? "";
+});
+
+ipcMain.handle("set-webhook-url", (_event, url: string) => {
+  store.set("webhookUrl", url);
+  return true;
+});
+
+ipcMain.handle("send-webhook-notification", async (_event, phrase: string, emotion: string) => {
+  if (emotion !== "happy" && emotion !== "relaxed") return;
+  const service = ((store.get("webhookService") as string | undefined) ?? "none") as WebhookService;
+  const url = (store.get("webhookUrl") as string | undefined) ?? "";
+  await sendWebhookNotification(service, url, phrase);
 });
 
 ipcMain.on("set-ignore-mouse-events", (_event, ignore: boolean) => {
@@ -1044,14 +1153,10 @@ ipcMain.on("set-ignore-mouse-events", (_event, ignore: boolean) => {
 app.whenReady().then(async () => {
   createTray();
 
-  // Start active session monitor
-  activeSessionMonitor = createActiveSessionMonitor((sessionId) => {
-    activeSessionId = sessionId;
-    console.log(`[ActiveSession] Filter: ${sessionId ?? "none (all sessions)"}`);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("active-session-changed", sessionId);
-    }
-  });
+  // Start Claude settings monitor (allowedTools detection)
+  // __dirname is dist-electron/ in prod and electron/ in dev; one level up is the project root
+  const projectRoot = path.resolve(__dirname, "..");
+  settingsMonitor = createClaudeSettingsMonitor(projectRoot);
 
   // Check if engine binary exists before attempting to start
   const enginePath = getEnginePath();
@@ -1064,6 +1169,7 @@ app.whenReady().then(async () => {
     startMicMonitor();
   }
 
+  startCodexLogMonitor();
   createWindow();
   const autoUpdateCheck = (store.get("autoUpdateCheck") as boolean | undefined) ?? true;
   initAutoUpdater(mainWindow!, autoUpdateCheck);
@@ -1102,8 +1208,11 @@ app.on("before-quit", async (event) => {
   if (logMonitor) {
     logMonitor.close();
   }
-  if (activeSessionMonitor) {
-    activeSessionMonitor.close();
+  if (codexLogMonitor) {
+    codexLogMonitor.close();
+  }
+  if (settingsMonitor) {
+    settingsMonitor.close();
   }
   if (tray) {
     tray.destroy();
