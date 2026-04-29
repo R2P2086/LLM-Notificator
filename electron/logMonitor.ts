@@ -1,62 +1,84 @@
+// Modified from the original cc-mascot project by kazakago.
+// Original: https://github.com/kazakago/cc-mascot (Apache License 2.0)
 import * as chokidar from "chokidar";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import * as readline from "readline";
 import { parseClaudeCodeLog, SpeakMessage } from "./parsers/claudeCodeParser";
-import { cleanTextForSpeech, splitIntoSentences } from "./filters/textFilter";
-import { RuleBasedEmotionClassifier } from "./services/ruleBasedEmotionClassifier";
+import {
+  RESCAN_INTERVAL_MS,
+  BroadcastFn,
+  initializeFilePosition,
+  skipFileChanges,
+  processFileChanges,
+} from "./logMonitorUtils";
 
-// Track file positions to avoid re-reading
-const filePositions = new Map<string, number>();
-
-// Debounce map to prevent rapid-fire speech
-const lastProcessed = new Map<string, number>();
-const DEBOUNCE_MS = 100;
-
-// Emotion classifier for per-sentence re-classification
-const emotionClassifier = new RuleBasedEmotionClassifier();
-
-type BroadcastFn = (message: string) => void;
+const isWslPath = (p: string) => p.startsWith("\\\\wsl$") || p.startsWith("\\\\wsl.localhost");
 
 /**
  * Create a log monitor that watches Claude Code session logs
  * @param broadcast - Callback function to send messages to the renderer process
- * @param includeSubAgents - Whether to monitor sub-agent logs (depth: 3) or only main agent (depth: 1)
- * @param getActiveSessionId - Optional getter that returns the active session ID for filtering.
- *                             When it returns a non-null value, only logs from that session are broadcast.
+ * @param includeSubAgents - Whether to monitor sub-agent logs
+ * @param getActiveSessionId - Getter that returns the active session ID for filtering
+ * @param watchPath - Optional override for the watch directory
+ * @param isToolAllowed - Callback for auto-approve tool detection
+ * @param onAutoDetectSession - Called when a new active session is detected
  */
 export function createLogMonitor(
   broadcast: BroadcastFn,
   includeSubAgents = false,
   getActiveSessionId?: () => string | null,
+  watchPath?: string,
+  isToolAllowed?: (name: string, command?: string) => boolean,
+  onAutoDetectSession?: (sessionId: string) => void,
 ) {
   const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
-  const claudeProjectsDir = path.join(claudeConfigDir, "projects");
+  const resolvedWatchPath = watchPath || path.join(claudeConfigDir, "projects");
+  const usePolling = isWslPath(resolvedWatchPath);
 
-  const watcher = chokidar.watch(claudeProjectsDir, {
-    ignored: (path, stats) => stats?.isFile() === true && !path.endsWith(".jsonl"), // only watch jsonl files
-    awaitWriteFinish: {
-      stabilityThreshold: 100,
-      pollInterval: 50,
-    },
-    depth: includeSubAgents ? 3 : 1, // Sub-agents (depth: 3) or main agent only (depth: 1)
+  const positions = new Map<string, number>();
+  const lastProcessed = new Map<string, number>();
+
+  const makeParser = (filePath: string) => (line: string): SpeakMessage[] =>
+    parseClaudeCodeLog(line, includeSubAgents, filePath, isToolAllowed);
+
+  // 30秒ごとに最新セッションファイルを探して切り替える
+  const rescanTimer = setInterval(() => {
+    const newest = findNewestClaudeSession(resolvedWatchPath);
+    if (!newest) return;
+    const current = getActiveSessionId?.() ?? null;
+    if (newest.sessionId !== current && onAutoDetectSession) {
+      console.log(`[LogMonitor] New session detected: ${newest.sessionId}`);
+      if (!positions.has(newest.filePath)) initializeFilePosition(positions, newest.filePath);
+      onAutoDetectSession(newest.sessionId);
+    }
+  }, RESCAN_INTERVAL_MS);
+
+  const watcher = chokidar.watch(resolvedWatchPath, {
+    ignored: (p, stats) => stats?.isFile() === true && !p.endsWith(".jsonl"),
+    awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 50 },
+    depth: includeSubAgents ? 3 : 1,
+    usePolling,
+    interval: usePolling ? 1000 : undefined,
   });
 
   watcher.on("add", (filePath: string) => {
-    initializeFilePosition(filePath);
+    initializeFilePosition(positions, filePath);
   });
 
   watcher.on("change", (filePath: string) => {
-    // Filter by active session ID if set
     const activeSessionId = getActiveSessionId?.() ?? null;
+
+    if (!activeSessionId && onAutoDetectSession) {
+      onAutoDetectSession(path.basename(filePath, ".jsonl"));
+    }
+
     if (activeSessionId && !shouldProcessFile(filePath, activeSessionId)) {
-      // Advance file position without processing so content is discarded
-      skipFileChanges(filePath);
+      skipFileChanges(positions, filePath);
       return;
     }
     console.log(`[LogMonitor] File changes detected: ${filePath}`);
-    processFileChanges(filePath, broadcast, includeSubAgents);
+    processFileChanges(filePath, positions, lastProcessed, makeParser(filePath), broadcast, "LogMonitor");
   });
 
   watcher.on("error", (error: unknown) => {
@@ -64,155 +86,45 @@ export function createLogMonitor(
   });
 
   watcher.on("ready", () => {
-    console.log(`[LogMonitor] Monitoring ${filePositions.size} files`);
+    console.log(`[LogMonitor] Monitoring ${positions.size} files`);
   });
 
   return {
     close: () => {
+      clearInterval(rescanTimer);
       watcher.close();
-      filePositions.clear();
+      positions.clear();
       lastProcessed.clear();
     },
   };
 }
 
-function initializeFilePosition(filePath: string) {
+/** 監視パス配下の最新セッション JSONL ファイルを返す（サブエージェントは除外） */
+function findNewestClaudeSession(watchPath: string): { filePath: string; sessionId: string } | null {
   try {
-    const stats = fs.statSync(filePath);
-    filePositions.set(filePath, stats.size);
-  } catch {
-    filePositions.set(filePath, 0);
-  }
-}
-
-/**
- * Advance the file position to the end without processing content.
- * This discards filtered-out messages so they aren't replayed when the filter is removed.
- */
-function skipFileChanges(filePath: string) {
-  try {
-    const stats = fs.statSync(filePath);
-    filePositions.set(filePath, stats.size);
-  } catch {
-    // ignore
-  }
-}
-
-async function processFileChanges(filePath: string, broadcast: BroadcastFn, includeSubAgents: boolean) {
-  // Debounce check
-  const now = Date.now();
-  const lastTime = lastProcessed.get(filePath) || 0;
-  if (now - lastTime < DEBOUNCE_MS) {
-    return;
-  }
-  lastProcessed.set(filePath, now);
-
-  const startPosition = filePositions.get(filePath) || 0;
-
-  try {
-    const stats = fs.statSync(filePath);
-    const currentSize = stats.size;
-
-    // File might have been truncated or rotated
-    if (currentSize < startPosition) {
-      filePositions.set(filePath, currentSize);
-      return;
-    }
-
-    // No new content
-    if (currentSize === startPosition) {
-      return;
-    }
-
-    // Read new content
-    const newContent = await readNewLines(filePath, startPosition, currentSize);
-    filePositions.set(filePath, currentSize);
-
-    // Process each new line
-    for (const line of newContent) {
-      processLogLine(line, broadcast, includeSubAgents, filePath);
-    }
-  } catch (err) {
-    console.error(`[LogMonitor] Error processing ${filePath}:`, err);
-  }
-}
-
-async function readNewLines(filePath: string, startPosition: number, endPosition: number): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    const lines: string[] = [];
-    const stream = fs.createReadStream(filePath, {
-      start: startPosition,
-      end: endPosition - 1,
-      encoding: "utf8",
-    });
-
-    const rl = readline.createInterface({
-      input: stream,
-      crlfDelay: Infinity,
-    });
-
-    rl.on("line", (line) => {
-      if (line.trim()) {
-        lines.push(line);
+    let newest: { filePath: string; sessionId: string; mtime: number } | null = null;
+    for (const projectEntry of fs.readdirSync(watchPath, { withFileTypes: true })) {
+      if (!projectEntry.isDirectory()) continue;
+      const projectPath = path.join(watchPath, projectEntry.name);
+      for (const entry of fs.readdirSync(projectPath, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+        const filePath = path.join(projectPath, entry.name);
+        const mtime = fs.statSync(filePath).mtimeMs;
+        if (!newest || mtime > newest.mtime) {
+          newest = { filePath, sessionId: path.basename(entry.name, ".jsonl"), mtime };
+        }
       }
-    });
-
-    rl.on("close", () => resolve(lines));
-    rl.on("error", reject);
-  });
+    }
+    return newest;
+  } catch {
+    return null;
+  }
 }
 
-/**
- * Process a single log line and broadcast speak messages
- * @param line - A single line from the JSONL log file
- * @param broadcast - Callback function to send messages to the renderer process
- * @param includeSubAgents - Whether to include sub-agent messages
- */
-/**
- * Check if a log file should be processed based on the active session ID.
- * JSONL files are named {sessionId}.jsonl, and sub-agent files are in {sessionId}/{subId}.jsonl.
- */
 function shouldProcessFile(filePath: string, activeSessionId: string): boolean {
   const basename = path.basename(filePath, ".jsonl");
   if (basename === activeSessionId) return true;
-
-  // Sub-agent: parent directory name is the session ID
   const parentDir = path.basename(path.dirname(filePath));
   if (parentDir === activeSessionId) return true;
-
   return false;
-}
-
-function processLogLine(line: string, broadcast: BroadcastFn, includeSubAgents: boolean, logFilePath?: string) {
-  // Parse the log line using Claude Code parser
-  const messages: SpeakMessage[] = parseClaudeCodeLog(line, includeSubAgents, logFilePath);
-
-  // Process each message
-  for (const message of messages) {
-    // Apply text filtering to clean up markdown and other syntax
-    const cleanedText = cleanTextForSpeech(message.text);
-
-    if (cleanedText) {
-      // Split into sentences for faster sequential speech synthesis
-      const sentences = splitIntoSentences(cleanedText);
-
-      for (const sentence of sentences) {
-        // Skip empty sentences (e.g. from blank lines between paragraphs)
-        if (!sentence) continue;
-
-        // Re-classify emotion per sentence for more accurate expression
-        const emotion = emotionClassifier.classify(sentence);
-
-        console.log(`[LogMonitor] Extracted text: ${sentence.substring(0, 50)}...`);
-
-        broadcast(
-          JSON.stringify({
-            ...message,
-            text: sentence,
-            emotion,
-          }),
-        );
-      }
-    }
-  }
 }

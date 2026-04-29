@@ -328,13 +328,11 @@ describe("logMonitor", () => {
   });
 
   describe("ログ行のパースとブロードキャスト", () => {
-    it("ファイル変更時にパース・フィルタ・ブロードキャストのパイプラインが実行される", async () => {
+    it("ファイル変更時にパース・ブロードキャストが実行される", async () => {
       vi.spyOn(console, "log").mockImplementation(() => {});
       const { parseClaudeCodeLog } = await import("./parsers/claudeCodeParser");
-      const { cleanTextForSpeech } = await import("./filters/textFilter");
 
-      (parseClaudeCodeLog as any).mockReturnValue([{ type: "speak", text: "こんにちは！", emotion: "happy" }]);
-      (cleanTextForSpeech as any).mockReturnValue("こんにちは！");
+      (parseClaudeCodeLog as any).mockReturnValue([{ type: "speak", text: "", emotion: "happy" }]);
 
       let addCallback: ((filePath: string) => void) | null = null;
       let changeCallback: ((filePath: string) => void) | null = null;
@@ -376,19 +374,16 @@ describe("logMonitor", () => {
       await Promise.resolve();
 
       expect(parseClaudeCodeLog).toHaveBeenCalled();
-      expect(cleanTextForSpeech).toHaveBeenCalledWith("こんにちは！");
       expect(mockBroadcast).toHaveBeenCalledWith(
-        JSON.stringify({ type: "speak", text: "こんにちは！", emotion: "neutral" }),
+        JSON.stringify({ type: "speak", text: "", emotion: "happy" }),
       );
     });
 
-    it("フィルタ後に空文字になった場合はブロードキャストしない", async () => {
+    it("emotion がない場合はブロードキャストしない", async () => {
       vi.spyOn(console, "log").mockImplementation(() => {});
       const { parseClaudeCodeLog } = await import("./parsers/claudeCodeParser");
-      const { cleanTextForSpeech } = await import("./filters/textFilter");
 
-      (parseClaudeCodeLog as any).mockReturnValue([{ type: "speak", text: "```code block```", emotion: "neutral" }]);
-      (cleanTextForSpeech as any).mockReturnValue("");
+      (parseClaudeCodeLog as any).mockReturnValue([{ type: "speak", text: "", emotion: undefined }]);
 
       let addCallback: ((filePath: string) => void) | null = null;
       let changeCallback: ((filePath: string) => void) | null = null;
@@ -426,7 +421,6 @@ describe("logMonitor", () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(cleanTextForSpeech).toHaveBeenCalled();
       expect(mockBroadcast).not.toHaveBeenCalled();
     });
   });
