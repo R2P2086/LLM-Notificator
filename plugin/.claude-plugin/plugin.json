@@ -1,6 +1,0 @@
-{
-  "name": "llm-notificator",
-  "description": "LLM Notificatorのセッション発話制御プラグイン。特定のClaude Codeセッションのみを発話対象にフィルタリングできます。",
-  "version": "1.0.0",
-  "repository": "https://github.com/R2P2086/LLM-Notificator"
-}
