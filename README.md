@@ -2,22 +2,24 @@
   <img src="public/notification-default.svg" alt="LLM Notificator" width="64" height="64">
 </p>
 <h1 align="center">LLM Notificator</h1>
-<p align="center">Claude Code の作業完了・確認要求をデスクトップポップアップ＋ボイスで通知する常駐マスコット。</p>
+<p align="center">Claude Code / Codex の作業完了・確認要求をデスクトップポップアップ＋ボイスで通知する常駐マスコット。</p>
 <p align="center">
   <a href="https://github.com/R2P2086/LLM-Notificator"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
 </p>
 
 ## 特徴
 
-- **通知特化**: Claude Code の作業完了・確認要求・コマンド実行のタイミングを自動検知
+- **通知特化**: Claude Code / Codex の作業完了・確認要求・コマンド実行のタイミングを自動検知
 - **デスクトップポップアップ**: 画像キャラクターが画面端から飛び出す独自通知（OS通知不使用）
 - **ボイス通知**: AivisSpeech / VOICEVOX による日本語音声合成
 - **Webhook通知**: Slack / Discord への通知送信（ポップアップの代替）
-- **自動ログ監視**: Claude Code のログファイルを監視、プラグイン不要
+- **自動ログ監視**: ログファイルを監視、プラグイン不要
 - **オフライン動作**: インターネット接続不要でローカル環境で完結
 - **カスタマイズ**: 通知画像・フレーズ・ポップアップ位置・アニメーション等を設定可能
 
 ## 通知トリガー
+
+### Claude Code
 
 | 条件 | 通知カテゴリ | フレーズ例 |
 |---|---|---|
@@ -30,13 +32,21 @@
 
 > 自動承認の判定は `~/.claude/settings.json` の `permissions.allow` / `permissions.ask` をリアルタイム監視して行います。
 
+### Codex
+
+| 条件 | 通知カテゴリ | フレーズ例 |
+|---|---|---|
+| ターン完了（`task_complete`） | 完了 | 終わったよ！ |
+| コマンド承認待ち（`require_escalated`） | 確認 | 確認してね |
+
 ## 利用環境
 
 | 環境 | 対応状況 |
 |---|---|
 | Windows（Claude Code CLI / VSCode拡張） | ✅ |
-| macOS（Claude Code CLI / VSCode拡張） | ✅ |
+| Windows（Codex CLI / VSCode拡張） | ✅ |
 | WSL で Claude Code | ✅（ポーリングモード・手動パス設定） |
+| macOS | ❓（未確認） |
 | Claude Desktop | ❌（ログ形式が異なる） |
 
 ## セットアップ
@@ -50,9 +60,8 @@
 インストーラー版によるグローバルインストールを推奨します。
 
 > [!TIP]
-> エンジンへのデフォルトパス:
-> - macOS: `AivisSpeech.app/Contents/Resources/AivisSpeech-Engine/run`
-> - Windows: `C:\Program Files\AivisSpeech\AivisSpeech-Engine\run.exe`
+> エンジンへのデフォルトパス (Windows):
+> `C:\Program Files\AivisSpeech\AivisSpeech-Engine\run.exe`
 
 初回起動とモデルDLまで済ませれば、以降は LLM Notificator が自動的にエンジンプロセスを起動します。
 
@@ -109,15 +118,16 @@ https://github.com/R2P2086/LLM-Notificator/releases
 
 | 設定 | 内容 |
 |---|---|
-| 監視フォルダ | デフォルト: `~/.claude/projects/`（WSL環境は手動設定） |
-| セッションフィルタ | 起動後に最初に動いたセッションを自動検出して固定。設定画面から解除可能 |
+| Claude Code 監視フォルダ | デフォルト: `~/.claude/projects/`（WSL環境は手動設定） |
+| Claude Code セッション | 起動後に最初に動いたセッションを自動検出して固定。設定画面から解除可能 |
+| Codex 監視フォルダ | デフォルト: `~/.codex/sessions/` |
+| Codex セッション | 起動後に最初に動いたセッションを自動検出して固定。設定画面から解除可能 |
 
 ### その他タブ
 
 | 設定 | 内容 |
 |---|---|
 | Webhook通知 | Slack / Discord / Microsoft Teams（未検証）へのメッセージ送信 |
-| マイク使用中ミュート | 別アプリがマイク使用中に発話をミュート |
 | サブエージェントを含める | サブエージェントのログも通知対象に含める |
 | アップデート確認 | 起動時の自動アップデートチェック |
 
@@ -137,10 +147,11 @@ Slack / Discord の Incoming Webhook URL を設定画面に貼り付けること
 ### 仕組み
 
 ```
-Claude Code
+Claude Code / Codex
     ↓ JSONL ログ出力
 ~/.claude/projects/**/*.jsonl
-    ↓ chokidar 監視
+~/.codex/sessions/**/*.jsonl
+    ↓ chokidar 監視（LLMごとに独立したモニター）
 Electron メインプロセス
     ↓ ログパース・感情判定・auto-approve 判定
 Electron レンダラープロセス
@@ -154,13 +165,8 @@ AivisSpeech / VOICEVOX
 git clone https://github.com/R2P2086/LLM-Notificator.git
 cd LLM-Notificator
 npm install
-npm run build:mic-monitor  # マイクミュート機能を使う場合
 npm run dev
 ```
-
-**前提条件（マイクミュート機能）:**
-- macOS: Xcode Command Line Tools（`xcode-select --install`）
-- Windows: Visual Studio Build Tools with C++
 
 ### 技術スタック
 
