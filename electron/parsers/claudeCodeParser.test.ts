@@ -1,632 +1,166 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { parseClaudeCodeLog } from "./claudeCodeParser";
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
+
+function makeAssistantMsg(stopReason: string | null, content: unknown[]) {
+  return JSON.stringify({
+    message: { type: "message", role: "assistant", content, stop_reason: stopReason },
+  });
+}
 
 describe("parseClaudeCodeLog", () => {
-  describe("正常なJSONLログの解析", () => {
-    it("assistantメッセージからテキストを抽出する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "text", text: "こんにちは！テストメッセージです。" }],
-        },
-      });
-
+  describe("end_turn: テキストあり → happy", () => {
+    it("text content があれば happy を返す", () => {
+      const line = makeAssistantMsg("end_turn", [{ type: "text", text: "タスク完了しました" }]);
       const result = parseClaudeCodeLog(line);
-
       expect(result).toHaveLength(1);
-      expect(result[0]).toMatchObject({
-        type: "speak",
-        text: "こんにちは！テストメッセージです。",
-      });
-      expect(result[0].emotion).toBeDefined();
+      expect(result[0]).toMatchObject({ type: "speak", text: "", emotion: "happy" });
     });
 
-    it("複数のテキストコンテンツを抽出する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [
-            { type: "text", text: "最初のメッセージ" },
-            { type: "text", text: "2番目のメッセージ" },
-            { type: "text", text: "3番目のメッセージ" },
-          ],
-        },
-      });
+    it("text content がなければ空を返す", () => {
+      const line = makeAssistantMsg("end_turn", [{ type: "thinking", thinking: "..." }]);
+      expect(parseClaudeCodeLog(line)).toHaveLength(0);
+    });
 
+    it("text が空文字のみなら空を返す", () => {
+      const line = makeAssistantMsg("end_turn", [{ type: "text", text: "   " }]);
+      expect(parseClaudeCodeLog(line)).toHaveLength(0);
+    });
+  });
+
+  describe("tool_use: AskUserQuestion → relaxed", () => {
+    it("AskUserQuestion は relaxed を返す", () => {
+      const line = makeAssistantMsg("tool_use", [
+        { type: "text", text: "確認します" },
+        { type: "tool_use", name: "AskUserQuestion" },
+      ]);
       const result = parseClaudeCodeLog(line);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({ type: "speak", text: "", emotion: "relaxed" });
+    });
+  });
 
-      expect(result).toHaveLength(3);
-      expect(result[0].text).toBe("最初のメッセージ");
-      expect(result[1].text).toBe("2番目のメッセージ");
-      expect(result[2].text).toBe("3番目のメッセージ");
+  describe("tool_use: Bash", () => {
+    it("Bash が許可されていなければ relaxed", () => {
+      const line = makeAssistantMsg("tool_use", [{ type: "tool_use", name: "Bash" }]);
+      const result = parseClaudeCodeLog(line, undefined, undefined, () => false);
+      expect(result[0]).toMatchObject({ emotion: "relaxed" });
     });
 
-    it("前後の空白をトリムする", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "text", text: "  前後に空白があります  " }],
-        },
+    it("Bash が許可されていれば surprised", () => {
+      const line = makeAssistantMsg("tool_use", [{ type: "tool_use", name: "Bash" }]);
+      const result = parseClaudeCodeLog(line, undefined, undefined, () => true);
+      expect(result[0]).toMatchObject({ emotion: "surprised" });
+    });
+
+    it("isToolAllowed 未指定は relaxed (デフォルト false)", () => {
+      const line = makeAssistantMsg("tool_use", [{ type: "tool_use", name: "Bash" }]);
+      expect(parseClaudeCodeLog(line)[0]).toMatchObject({ emotion: "relaxed" });
+    });
+
+    it("input.command が isToolAllowed に渡される", () => {
+      const line = makeAssistantMsg("tool_use", [
+        { type: "tool_use", name: "Bash", input: { command: "echo hello" } },
+      ]);
+      let capturedCommand: string | undefined;
+      parseClaudeCodeLog(line, undefined, undefined, (_name, command) => {
+        capturedCommand = command;
+        return true;
+      });
+      expect(capturedCommand).toBe("echo hello");
+    });
+
+    it("input がなければ command は undefined で渡される", () => {
+      const line = makeAssistantMsg("tool_use", [{ type: "tool_use", name: "Bash" }]);
+      let capturedCommand: string | undefined = "sentinel";
+      parseClaudeCodeLog(line, undefined, undefined, (_name, command) => {
+        capturedCommand = command;
+        return false;
+      });
+      expect(capturedCommand).toBeUndefined();
+    });
+  });
+
+  describe("tool_use: APPROVAL_REQUIRED_TOOLS (Edit/Write/MultiEdit/NotebookEdit)", () => {
+    for (const tool of ["Edit", "Write", "MultiEdit", "NotebookEdit"]) {
+      it(`${tool} が拒否されていれば relaxed`, () => {
+        const line = makeAssistantMsg("tool_use", [{ type: "tool_use", name: tool }]);
+        const result = parseClaudeCodeLog(line, undefined, undefined, () => false);
+        expect(result[0]).toMatchObject({ emotion: "relaxed" });
       });
 
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe("前後に空白があります");
-    });
-
-    it("感情が自動的に分類される", () => {
-      const happyLine = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "text", text: "バグを修正できました！" }],
-        },
+      it(`${tool} が許可されていれば空を返す`, () => {
+        const line = makeAssistantMsg("tool_use", [{ type: "tool_use", name: tool }]);
+        expect(parseClaudeCodeLog(line, undefined, undefined, () => true)).toHaveLength(0);
       });
+    }
+  });
 
-      const result = parseClaudeCodeLog(happyLine);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].emotion).toBe("happy");
+  describe("tool_use: mcp__ ツール", () => {
+    it("mcp__tool が拒否されていれば relaxed", () => {
+      const line = makeAssistantMsg("tool_use", [{ type: "tool_use", name: "mcp__server__tool" }]);
+      const result = parseClaudeCodeLog(line, undefined, undefined, () => false);
+      expect(result[0]).toMatchObject({ emotion: "relaxed" });
     });
+
+    it("mcp__tool が許可されていれば空を返す", () => {
+      const line = makeAssistantMsg("tool_use", [{ type: "tool_use", name: "mcp__server__tool" }]);
+      expect(parseClaudeCodeLog(line, undefined, undefined, () => true)).toHaveLength(0);
+    });
+  });
+
+  describe("tool_use: その他のツール (Read/Glob 等) は無視", () => {
+    for (const tool of ["Read", "Glob", "WebSearch", "ToolSearch", "Agent"]) {
+      it(`${tool} は常に空を返す`, () => {
+        const line = makeAssistantMsg("tool_use", [{ type: "tool_use", name: tool }]);
+        expect(parseClaudeCodeLog(line)).toHaveLength(0);
+        expect(parseClaudeCodeLog(line, undefined, undefined, () => false)).toHaveLength(0);
+        expect(parseClaudeCodeLog(line, undefined, undefined, () => true)).toHaveLength(0);
+      });
+    }
   });
 
   describe("フィルタリング - 除外すべきメッセージ", () => {
     it("通常のuserメッセージは無視する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "user",
-          content: [{ type: "text", text: "ユーザーのメッセージ" }],
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(0);
+      const line = JSON.stringify({ message: { type: "message", role: "user", content: [{ type: "text", text: "test" }] } });
+      expect(parseClaudeCodeLog(line)).toHaveLength(0);
     });
 
     it("typeがmessage以外は無視する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "other_type",
-          role: "assistant",
-          content: [{ type: "text", text: "テキスト" }],
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(0);
+      const line = JSON.stringify({ message: { type: "other_type", role: "assistant", content: [], stop_reason: "end_turn" } });
+      expect(parseClaudeCodeLog(line)).toHaveLength(0);
     });
 
     it("messageプロパティがない場合は無視する", () => {
-      const line = JSON.stringify({
-        other: "data",
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(0);
+      expect(parseClaudeCodeLog(JSON.stringify({ other: "data" }))).toHaveLength(0);
     });
 
     it("contentが配列でない場合は無視する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: "not an array",
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(0);
+      const line = JSON.stringify({ message: { type: "message", role: "assistant", content: "not an array", stop_reason: "end_turn" } });
+      expect(parseClaudeCodeLog(line)).toHaveLength(0);
     });
 
-    it("thinking タイプのコンテンツは無視する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [
-            { type: "text", text: "喋るテキスト" },
-            { type: "thinking", thinking: "内部思考プロセス" },
-          ],
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe("喋るテキスト");
+    it("stop_reason がない場合は無視する", () => {
+      const line = JSON.stringify({ message: { type: "message", role: "assistant", content: [{ type: "text", text: "hello" }] } });
+      expect(parseClaudeCodeLog(line)).toHaveLength(0);
     });
 
-    it("tool_use タイプのコンテンツは無視する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [
-            { type: "text", text: "喋るテキスト" },
-            { type: "tool_use", name: "Read", input: {} },
-          ],
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe("喋るテキスト");
-    });
-
-    it("空文字列のテキストは無視する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [
-            { type: "text", text: "" },
-            { type: "text", text: "   " }, // 空白のみ
-            { type: "text", text: "有効なテキスト" },
-          ],
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe("有効なテキスト");
-    });
-
-    it("textプロパティがないコンテンツは無視する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [
-            { type: "text" }, // textプロパティなし
-            { type: "text", text: "有効なテキスト" },
-          ],
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe("有効なテキスト");
+    it("tool_use で tool_use コンテンツがなければ無視する", () => {
+      const line = makeAssistantMsg("tool_use", [{ type: "text", text: "hello" }]);
+      expect(parseClaudeCodeLog(line)).toHaveLength(0);
     });
   });
 
   describe("エラーハンドリング", () => {
     it("不正なJSONは空配列を返す", () => {
-      const line = "this is not valid JSON {";
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(0);
+      expect(parseClaudeCodeLog("this is not valid JSON {")).toHaveLength(0);
     });
 
     it("空文字列は空配列を返す", () => {
-      const result = parseClaudeCodeLog("");
-
-      expect(result).toHaveLength(0);
+      expect(parseClaudeCodeLog("")).toHaveLength(0);
     });
 
     it("nullやundefinedを含むJSONでもクラッシュしない", () => {
-      const line = JSON.stringify({
-        message: null,
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(0);
-    });
-  });
-
-  describe("実際のClaude Codeログパターン", () => {
-    it("コード説明メッセージを処理する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "この関数はファイルを読み込んで処理します。例外ハンドリングも含まれています。",
-            },
-          ],
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].emotion).toBe("neutral");
-    });
-
-    it("ツール使用を含むメッセージから適切にテキストを抽出する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [
-            { type: "text", text: "ファイルを確認します。" },
-            { type: "tool_use", name: "Read", input: { file_path: "/path/to/file" } },
-          ],
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe("ファイルを確認します。");
-    });
-
-    it("長文のコード説明を処理する", () => {
-      const longText = "このコードは複雑な処理を行います。".repeat(10);
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "text", text: longText }],
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe(longText);
-    });
-
-    it("日本語の技術用語を含むメッセージを処理する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [
-            { type: "text", text: "TypeScriptの型定義を追加しました。インターフェースとクラスを実装しています。" },
-          ],
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe("TypeScriptの型定義を追加しました。インターフェースとクラスを実装しています。");
-      expect(result[0].emotion).toBe("neutral");
-    });
-  });
-
-  describe("local-command-stdout メッセージの処理", () => {
-    it("サブエージェント無効時: <local-command-stdout>タグで囲まれたuserメッセージを抽出する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout>コマンドの出力結果</local-command-stdout>",
-        },
-      });
-
-      const result = parseClaudeCodeLog(line, false);
-
-      expect(result).toHaveLength(1);
-      expect(result[0]).toMatchObject({
-        type: "speak",
-        text: "コマンドの出力結果",
-        emotion: "neutral",
-      });
-    });
-
-    it("サブエージェント有効時: <local-command-stdout>メッセージは無視される", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout>コマンドの出力結果</local-command-stdout>",
-        },
-      });
-
-      const result = parseClaudeCodeLog(line, true);
-
-      expect(result).toHaveLength(0);
-    });
-
-    it("タグを正しく除去する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout>テスト実行が成功しました</local-command-stdout>",
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe("テスト実行が成功しました");
-      expect(result[0].text).not.toContain("<local-command-stdout>");
-      expect(result[0].text).not.toContain("</local-command-stdout>");
-    });
-
-    it("感情が自動的に分類される", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout>成功しました！</local-command-stdout>",
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].emotion).toBe("happy");
-    });
-
-    it("タグ内の前後の空白をトリムする", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout>  空白あり  </local-command-stdout>",
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe("空白あり");
-    });
-
-    it("開始タグのみの場合は無視する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout>タグが閉じていない",
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(0);
-    });
-
-    it("終了タグのみの場合は無視する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "user",
-          content: "タグが開いていない</local-command-stdout>",
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(0);
-    });
-
-    it("タグ内が空の場合は無視する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout></local-command-stdout>",
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(0);
-    });
-
-    it("タグ内が空白のみの場合は無視する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout>   </local-command-stdout>",
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(0);
-    });
-
-    it("contentが配列の場合は無視する", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "<local-command-stdout>配列形式</local-command-stdout>",
-            },
-          ],
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result).toHaveLength(0);
-    });
-
-    it("assistantメッセージとlocal-command-stdoutメッセージの両方が正しく処理される", () => {
-      const assistantLine = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "text", text: "処理を開始します。" }],
-        },
-      });
-
-      const userLine = JSON.stringify({
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout>テスト実行が成功しました！</local-command-stdout>",
-        },
-      });
-
-      const assistantResult = parseClaudeCodeLog(assistantLine, false);
-      const userResult = parseClaudeCodeLog(userLine, false);
-
-      // 両方とも正しく処理される
-      expect(assistantResult).toHaveLength(1);
-      expect(assistantResult[0].text).toBe("処理を開始します。");
-      expect(assistantResult[0].emotion).toBeDefined();
-
-      expect(userResult).toHaveLength(1);
-      expect(userResult[0].text).toBe("テスト実行が成功しました！");
-      expect(userResult[0].emotion).toBe("happy");
-    });
-  });
-
-  describe("local-command-stdout の Skill結果 vs CLIコマンド出力の判別", () => {
-    let tmpDir: string;
-    let tmpFile: string;
-
-    function createTmpLogFile(content: string): string {
-      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-mascot-test-"));
-      tmpFile = path.join(tmpDir, "test.jsonl");
-      fs.writeFileSync(tmpFile, content, "utf8");
-      return tmpFile;
-    }
-
-    afterEach(() => {
-      if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
-      if (tmpDir && fs.existsSync(tmpDir)) fs.rmdirSync(tmpDir);
-    });
-
-    it("Skill結果（<command-name>なしの親）は読み上げ対象になる", () => {
-      const parentUuid = "parent-uuid-123";
-      const parentLine = JSON.stringify({
-        uuid: parentUuid,
-        message: {
-          type: "message",
-          role: "user",
-          content: "<skill>commit</skill>\nPlease commit the changes.",
-        },
-      });
-
-      const line = JSON.stringify({
-        parentUuid: parentUuid,
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout>コミットが完了しました！</local-command-stdout>",
-        },
-      });
-
-      const logFile = createTmpLogFile(parentLine + "\n" + line);
-      const result = parseClaudeCodeLog(line, false, logFile);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe("コミットが完了しました！");
-    });
-
-    it("CLIコマンド出力（<command-name>ありの親）はスキップされる", () => {
-      const parentUuid = "parent-uuid-456";
-      const parentLine = JSON.stringify({
-        uuid: parentUuid,
-        message: {
-          type: "message",
-          role: "user",
-          content: "<command-name>/clear</command-name>",
-        },
-      });
-
-      const line = JSON.stringify({
-        parentUuid: parentUuid,
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout>クリアしました</local-command-stdout>",
-        },
-      });
-
-      const logFile = createTmpLogFile(parentLine + "\n" + line);
-      const result = parseClaudeCodeLog(line, false, logFile);
-
-      expect(result).toHaveLength(0);
-    });
-
-    it("親メッセージが見つからない場合はフォールバックで読み上げ対象にする", () => {
-      const line = JSON.stringify({
-        parentUuid: "nonexistent-uuid",
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout>何かの出力</local-command-stdout>",
-        },
-      });
-
-      const logFile = createTmpLogFile('{"uuid":"other-uuid"}\n');
-      const result = parseClaudeCodeLog(line, false, logFile);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe("何かの出力");
-    });
-
-    it("logFilePath未指定時は既存動作（読み上げ対象）が維持される", () => {
-      const line = JSON.stringify({
-        parentUuid: "some-uuid",
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout>出力結果</local-command-stdout>",
-        },
-      });
-
-      // logFilePath を渡さない場合、isSkillOutput は呼ばれない
-      const result = parseClaudeCodeLog(line, false);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe("出力結果");
-    });
-
-    it("parentUuidがない場合は既存動作（読み上げ対象）が維持される", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "user",
-          content: "<local-command-stdout>出力結果</local-command-stdout>",
-        },
-      });
-
-      const logFile = createTmpLogFile("");
-      const result = parseClaudeCodeLog(line, false, logFile);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].text).toBe("出力結果");
-    });
-  });
-
-  describe("SpeakMessageの型検証", () => {
-    it("正しいSpeakMessage型を返す", () => {
-      const line = JSON.stringify({
-        message: {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "text", text: "テストメッセージ" }],
-        },
-      });
-
-      const result = parseClaudeCodeLog(line);
-
-      expect(result[0]).toHaveProperty("type", "speak");
-      expect(result[0]).toHaveProperty("text");
-      expect(result[0]).toHaveProperty("emotion");
-      expect(["neutral", "happy", "angry", "sad", "relaxed", "surprised"]).toContain(result[0].emotion);
+      expect(parseClaudeCodeLog(JSON.stringify({ message: null }))).toHaveLength(0);
     });
   });
 });

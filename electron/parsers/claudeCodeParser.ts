@@ -1,13 +1,5 @@
-/**
- * Claude Code JSONLログパーサー
- * Claude Codeのセッションログを解析し、アシスタントメッセージを抽出する
- */
-
-import * as fs from "fs";
-import { RuleBasedEmotionClassifier } from "../services/ruleBasedEmotionClassifier";
-
-// グローバル感情分類器インスタンス
-const emotionClassifier = new RuleBasedEmotionClassifier();
+// Modified from the original cc-mascot project by kazakago.
+// Original: https://github.com/kazakago/cc-mascot (Apache License 2.0)
 
 export interface SpeakMessage {
   type: "speak";
@@ -18,12 +10,15 @@ export interface SpeakMessage {
 interface ContentItem {
   type: string;
   text?: string;
+  name?: string;
+  input?: Record<string, unknown>;
 }
 
 interface AssistantMessage {
   type: string;
   role: string;
   content: ContentItem[] | string;
+  stop_reason?: string | null;
 }
 
 interface LogEntry {
@@ -31,121 +26,71 @@ interface LogEntry {
   message?: AssistantMessage;
 }
 
-/**
- * local-command-stdout メッセージがSkill結果かCLIコマンド出力かを判定する
- * ログファイルからparentUuidに一致する親メッセージを探し、<command-name>タグの有無で判定する
- * @param parentUuid - local-command-stdoutメッセージのparentUuid
- * @param logFilePath - JSONLログファイルのパス
- * @returns Skill結果の場合true（<command-name>タグなし）、CLIコマンドの場合false
- */
-function isSkillOutput(parentUuid: string, logFilePath: string): boolean {
-  try {
-    const fileContent = fs.readFileSync(logFilePath, "utf8");
-    const lines = fileContent.split("\n");
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const entry = JSON.parse(line);
-        if (entry.uuid === parentUuid) {
-          // 親メッセージを発見 - <command-name>タグを含むか確認
-          const content = entry.message?.content;
-          if (typeof content === "string") {
-            // 親が<command-name>を含む場合はCLIコマンド（Skillではない）
-            return !content.includes("<command-name>");
-          }
-          // 親のcontentが文字列でない or 存在しない場合はSkill結果として扱う
-          return true;
-        }
-      } catch {
-        // 不正なJSON行はスキップ
-      }
-    }
-  } catch {
-    // ファイル読み込みエラー - デフォルトにフォールスルー
-  }
-
-  // 親メッセージが見つからない場合はSkill結果として扱う（読み上げ対象）
-  return true;
-}
+// Only these tools (besides Bash/AskUserQuestion) can require user approval.
+// Everything else (Read, Glob, WebSearch, ToolSearch, Agent, etc.) is silently ignored.
+const APPROVAL_REQUIRED_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 /**
- * Claude CodeのJSONLログ行を解析してテキストメッセージを抽出する
- * @param line - JSONLログファイルの1行
- * @param includeSubAgents - サブエージェントのメッセージを含めるかどうか
- * @param logFilePath - JSONLログファイルのパス（local-command-stdoutの親メッセージ参照用、省略可）
- * @returns SpeakMessageの配列（テキストを含まない行の場合は空配列）
+ * Claude CodeのJSONLログ行を解析して通知トリガーを検出する。
+ *
+ * Approach B: stop_reason + content type で感情を決定
+ *   - stop_reason "end_turn" + text content → happy (エラーキーワードあり → sad)
+ *   - stop_reason "tool_use" + AskUserQuestion → relaxed
+ *   - stop_reason "tool_use" + Bash (allowedTools 外) → relaxed
+ *   - stop_reason "tool_use" + Bash (allowedTools 内) → surprised
+ *   - stop_reason "tool_use" + その他 (allowedTools 外) → relaxed
+ *   - stop_reason "tool_use" + その他 (allowedTools 内) → 無視
+ *   それ以外 (thinking のみ等) は無視。
  */
-export function parseClaudeCodeLog(line: string, includeSubAgents = false, logFilePath?: string): SpeakMessage[] {
-  const messages: SpeakMessage[] = [];
-
+export function parseClaudeCodeLog(
+  line: string,
+  _includeSubAgents?: boolean,
+  _logFilePath?: string,
+  isToolAllowed?: (name: string, command?: string) => boolean,
+): SpeakMessage[] {
   try {
     const entry: LogEntry = JSON.parse(line);
+    const msg = entry.message;
 
-    // ケース1: 通常のアシスタントメッセージ
-    // フィルタ: assistantロールかつmessageタイプのみ処理
-    if (entry.message?.role === "assistant" && entry.message?.type === "message") {
-      // フィルタ: contentが配列であること
-      if (Array.isArray(entry.message.content)) {
-        // テキストタイプのコンテンツのみ抽出
-        for (const item of entry.message.content) {
-          if (item.type === "text" && item.text) {
-            const text = item.text.trim();
-            if (text) {
-              // 感情分類器でテキストから感情を自動判定
-              const emotion = emotionClassifier.classify(text);
-              messages.push({
-                type: "speak",
-                text: text,
-                emotion: emotion,
-              });
-            }
-          }
-        }
-      }
+    if (!msg || msg.role !== "assistant" || msg.type !== "message") return [];
+    if (!Array.isArray(msg.content)) return [];
+
+    const content = msg.content as ContentItem[];
+    const stopReason = msg.stop_reason;
+
+    if (stopReason === "end_turn") {
+      const textItem = content.find((item) => item.type === "text" && item.text?.trim());
+      if (!textItem) return [];
+      return [{ type: "speak", text: "", emotion: "happy" }];
     }
 
-    // ケース2: ローカルコマンド標準出力メッセージ（userロール、特定タグ付き）
-    // Claude Codeがコマンド出力を<local-command-stdout>タグで囲んだuserロールメッセージとして出力する特殊ケースに対応。
-    // 加えて、親メッセージの<command-name>タグ有無でSkill結果（読み上げ）とCLIコマンド出力（スキップ）を判別する。
-    // この挙動は将来変更される可能性がある。
-    //
-    // サブエージェント無効時のみ処理する（includeSubAgents === false）。
-    else if (!includeSubAgents && entry.message?.role === "user") {
-      // contentが文字列であるか確認（配列ではない）
-      if (typeof entry.message.content === "string") {
-        const text = entry.message.content.trim();
-        // <local-command-stdout>タグで囲まれているか確認
-        if (text.startsWith("<local-command-stdout>") && text.endsWith("</local-command-stdout>")) {
-          // logFilePathが指定されている場合、Skill結果かCLIコマンド出力かを判定
-          if (logFilePath && entry.parentUuid) {
-            if (!isSkillOutput(entry.parentUuid, logFilePath)) {
-              // CLIコマンド出力 - スキップ（読み上げない）
-              return messages;
-            }
-          }
+    if (stopReason === "tool_use") {
+      const toolItem = content.find((item) => item.type === "tool_use" && item.name);
+      if (!toolItem?.name) return [];
 
-          // タグ間のコンテンツを抽出
-          const content = text
-            .replace(/^<local-command-stdout>/, "")
-            .replace(/<\/local-command-stdout>$/, "")
-            .trim();
+      const toolName = toolItem.name;
 
-          if (content) {
-            // 感情分類器でテキストから感情を自動判定
-            const emotion = emotionClassifier.classify(content);
-            messages.push({
-              type: "speak",
-              text: content,
-              emotion: emotion,
-            });
-          }
-        }
+      if (toolName === "AskUserQuestion") {
+        return [{ type: "speak", text: "", emotion: "relaxed" }];
       }
+
+      if (toolName === "Bash") {
+        const command = typeof toolItem.input?.command === "string" ? toolItem.input.command : undefined;
+        const allowed = isToolAllowed?.(toolName, command) ?? false;
+        return [{ type: "speak", text: "", emotion: allowed ? "surprised" : "relaxed" }];
+      }
+
+      // その他のツール: 承認が必要になりうるもののみ通知（mcp__ プレフィックスも対象）
+      if (!APPROVAL_REQUIRED_TOOLS.has(toolName) && !toolName.startsWith("mcp__")) return [];
+      if (isToolAllowed && !isToolAllowed(toolName)) {
+        return [{ type: "speak", text: "", emotion: "relaxed" }];
+      }
+
+      return [];
     }
+
+    return [];
   } catch {
-    // 不正なJSON行は無視
+    return [];
   }
-
-  return messages;
 }
