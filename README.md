@@ -1,219 +1,188 @@
 <p align="center">
-  <img src="docs/icon.png" alt="CC Mascot" width="64" height="64">
+  <img src="public/notification-default.svg" alt="LLM Notificator" width="64" height="64">
 </p>
-<h1 align="center">CC Mascot</h1>
-<p align="center">Claude Codeからの返答をVRMキャラクターがリアルタイムで読み上げ。<br />感情表現・リップシンク・視線追従で、コーディングに楽しいパートナーを。</p>
+<h1 align="center">LLM Notificator</h1>
+<p align="center">Claude Code の作業完了・確認要求をデスクトップポップアップ＋ボイスで通知する常駐マスコット。</p>
 <p align="center">
-  <a href="https://kazakago.github.io/cc-mascot/">https://kazakago.github.io/cc-mascot/</a>
+  <a href="https://github.com/R2P2086/LLM-Notificator"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
 </p>
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
-  <a href="https://github.com/kazakago/cc-mascot/actions/workflows/validate.yml"><img src="https://github.com/kazakago/cc-mascot/actions/workflows/validate.yml/badge.svg" alt="Validate"></a>
-</p>
-
-https://github.com/user-attachments/assets/f2742eac-1df3-436a-b79c-f7221e677474
-
-<img alt="スクリーンショット 2026-02-07 14 56 09" src="docs/screenshot.jpg" />
 
 ## 特徴
 
+- **通知特化**: Claude Code の作業完了・確認要求・コマンド実行のタイミングを自動検知
+- **デスクトップポップアップ**: 画像キャラクターが画面端から飛び出す独自通知（OS通知不使用）
+- **ボイス通知**: AivisSpeech / VOICEVOX による日本語音声合成
+- **Webhook通知**: Slack / Discord への通知送信（ポップアップの代替）
+- **自動ログ監視**: Claude Code のログファイルを監視、プラグイン不要
 - **オフライン動作**: インターネット接続不要でローカル環境で完結
-- **日本語特化**: 日本語の音声合成とルールベース感情分析に最適化
-- **自動ログ監視**: Claude Codeのログファイルを監視して自動的に発言を読み上げ
-- **音声合成エンジン**: AivisSpeech / VOICEVOX / 互換エンジンに対応
-- **リップシンク**: 音声に同期した自然な口の動き
-- **感情表現**: テキストから感情を自動判定してキャラクターに反映
-- **視線追従**: マウスカーソルの方向への視線追従
-- **カスタマイズ**: 好きなVRMモデルや音声スタイルに変更可能
+- **カスタマイズ**: 通知画像・フレーズ・ポップアップ位置・アニメーション等を設定可能
+
+## 通知トリガー
+
+| 条件 | 通知カテゴリ | フレーズ例 |
+|---|---|---|
+| ターン完了（`end_turn` + テキストあり） | 完了 | 終わったよ！ |
+| `AskUserQuestion` ツール使用 | 確認 | 確認してね |
+| Bash コマンド（承認待ち） | 確認 | 確認してね |
+| Bash コマンド（自動承認済み） | コマンド実行 | コマンド実行！ |
+| ファイル編集ツール（承認待ち） | 確認 | 確認してね |
+| MCP ツール（承認待ち） | 確認 | 確認してね |
+
+> 自動承認の判定は `~/.claude/settings.json` の `permissions.allow` / `permissions.ask` をリアルタイム監視して行います。
 
 ## 利用環境
 
-- macOS
-  - Apple Silicon搭載機種のみ対応
-- Windows
-  - WSL環境にインストールしたClaude Codeには非対応
+| 環境 | 対応状況 |
+|---|---|
+| Windows（Claude Code CLI / VSCode拡張） | ✅ |
+| macOS（Claude Code CLI / VSCode拡張） | ✅ |
+| WSL で Claude Code | ✅（ポーリングモード・手動パス設定） |
+| Claude Desktop | ❌（ログ形式が異なる） |
 
 ## セットアップ
 
-### 1. 音声合成エンジンのインストール
+### 1. 音声合成エンジンのインストール（任意）
 
-以下の音声合成エンジンをインストールしてください。
+ボイス通知を使用する場合は以下のいずれかをインストールしてください。
 
-**[AivisSpeech](https://aivis-project.com/)**
+**[AivisSpeech](https://aivis-project.com/)** （推奨）
 
-インストーラー版によるグローバルインストールを推奨します。  
-グローバルのデフォルトパス以外に音声合成エンジンを配置した場合、設定変更でエンジンパスを指定してください。  
-設定変更はキャラクターを右クリックまたはシステムトレイアイコンから入れます。
+インストーラー版によるグローバルインストールを推奨します。
 
 > [!TIP]
-> 参考: AivisSpeechのプログラムディレクトリ配下のエンジンまでのパス
->
+> エンジンへのデフォルトパス:
 > - macOS: `AivisSpeech.app/Contents/Resources/AivisSpeech-Engine/run`
-> - Windows: `AivisSpeech/AivisSpeech-Engine/run.exe`
+> - Windows: `C:\Program Files\AivisSpeech\AivisSpeech-Engine\run.exe`
 
-初回起動とモデルDLまで済ませれば上記アプリケーションを起動しておく必要はありません。  
-CC Mascotが自動的にエンジンプロセスを起動します。
+初回起動とモデルDLまで済ませれば、以降は LLM Notificator が自動的にエンジンプロセスを起動します。
 
-本アプリケーションはVOICEVOX API互換のエンジンを利用して動作します。  
-設定変更することで **[VOICEVOX](https://voicevox.hiroshiba.jp/)** も利用可能です。
+**[VOICEVOX](https://voicevox.hiroshiba.jp/)** も設定から切り替えて利用可能です。
 
-### 2. CC Mascotアプリケーションのインストール
+### 2. LLM Notificator のインストール
 
-下記から最新バイナリをインストールしてください。  
-https://github.com/kazakago/cc-mascot/releases
+下記から最新バイナリをインストールしてください。
 
-> [!NOTE]
-> ダウンロードすることで、[利用規約](https://kazakago.github.io/cc-mascot/terms.html)および[プライバシーポリシー](https://kazakago.github.io/cc-mascot/privacy.html)に同意したものとみなします。
+https://github.com/R2P2086/LLM-Notificator/releases
 
-### 3. CC Mascotアプリケーションの起動
+### 3. 起動
 
-アプリケーションを起動すると、VRMキャラクターと**システムトレイにアイコン**が表示されます。
-
-音声合成エンジンが見つからない場合はその旨を示すダイアログが起動時に表示されるので 「1. 音声合成エンジンのインストール」を参照して対応してください。
-
-### 4. Claude Codeで会話を開始
-
-アプリを起動した状態でClaude Codeで会話すると、自動的にキャラクターが喋ります。
-
-**仕組み:**
-
-- `~/.claude/projects/` 配下のログファイルをリアルタイム監視
-- Claude Codeの応答を自動検出
-- テキストから感情を自動判定
-- 音声合成してキャラクターが発話
+アプリケーションを起動するとシステムトレイにアイコンが表示されます。  
+音声合成エンジンが見つからない場合はダイアログが表示されます。設定画面でエンジンパスを確認してください。
 
 ## 基本操作
 
-### キャラクターの操作
-
-- **ドラッグ移動**: キャラクター上でドラッグすると好きな位置に移動できます
-- **右クリック**: キャラクター上で右クリックすると設定画面が開きます
-
 ### システムトレイメニュー
 
-- **設定を開く**: 設定画面にアクセスできます。
-- **バージョン情報**: バージョン情報とライセンス情報、アップデートを確認できます。
-- **終了**: CC Mascotを終了します。
+- **通知モード**: 両方（ポップアップ＋発話）/ ポップアップのみ / 発話のみ を切り替え
+- **設定を開く**: 設定画面にアクセス
+- **バージョン情報**: バージョン確認・アップデートチェック
+- **終了**: アプリを終了
 
-### リップシンクと表情変更
+### ポップアップ
 
-音声に同期して自動的に口が動きます。  
-表情変更にはVRMファイルに表情が含まれている必要があります。
+音声再生終了後に自動で閉じます（エンジン未起動時は 8 秒後に自動 dismiss）。
 
-## 設定変更
+## 設定
 
-### キャラクター
+設定はシステムトレイ → 「設定を開く」で開きます。
 
-- **VRMモデル変更**: 好きなVRMファイル（.vrm / .glb）を選択
-- **キャラクターサイズ**: ウィンドウサイズを調整（400〜1200px）
+### キャラクタータブ
 
-### オーディオ
+| 設定 | 内容 |
+|---|---|
+| 通知画像 | PNG / JPG / GIF / SVG / WebP（GIFはアニメーション対応） |
+| サイズ | 80〜400px |
+| 表示位置 | 8方向（右下 / 左下 / 下中央 / 右上 / 左上 / 上中央 / 右中央 / 左中央） |
+| アニメーション | スライド / ポップ / フェード / なし |
+| 通知モード | 両方 / ポップアップのみ / 発話のみ |
 
-- **音声合成エンジン**: AivisSpeech / VOICEVOX / カスタムパス から選択
-- **音声スタイル**: 話者・スタイルを選択（エンジンから自動取得）
-- **音量**: 音量調整（0.00〜2.00）
+### 音声タブ
 
-### モーション
+| 設定 | 内容 |
+|---|---|
+| エンジン | AivisSpeech / VOICEVOX / カスタムパス |
+| 音声スタイル | 話者・スタイルをエンジンから自動取得して選択 |
+| 音量 | 0.00〜2.00 |
+| 発話フレーズ | 感情ごとのフレーズをカスタマイズ可能 |
 
-- **待機アニメーションを使用する**: 待機中にたまにリアクションを取ります。
-- **発話アニメーションを使用する**: 発話時に感情に合わせたリアクションを取ります。
+### 監視タブ
 
-### 高度な設定
+| 設定 | 内容 |
+|---|---|
+| 監視フォルダ | デフォルト: `~/.claude/projects/`（WSL環境は手動設定） |
+| セッションフィルタ | 起動後に最初に動いたセッションを自動検出して固定。設定画面から解除可能 |
 
-- **マイク使用中はミュートにする**: 別のアプリがOSのマイクを使用している最中は、キャラクターの発話音声をミュートにします。スピーカー利用時のマイク使用中に意図せずキャラの声が入り込んでしまうことを防ぎます。
-- **サブエージェントの発言を含める**: サブエージェントの内容も発話の対象とします。
-- **起動時にアップデートを確認する**: インターネット通信を行い、新しいバージョンがあるかチェックします。
+### その他タブ
 
-## セッションフィルタリング（Claude Codeプラグイン）
+| 設定 | 内容 |
+|---|---|
+| Webhook通知 | Slack / Discord / Microsoft Teams（未検証）へのメッセージ送信 |
+| マイク使用中ミュート | 別アプリがマイク使用中に発話をミュート |
+| サブエージェントを含める | サブエージェントのログも通知対象に含める |
+| アップデート確認 | 起動時の自動アップデートチェック |
 
-Claude Codeを複数セッション並列で使用している場合、デフォルトではすべてのセッションを発話対象しますが、別途専用のClaude Codeプラグインを用いることで特定のセッションのみを発話対象としてフィルタリングできます。
+> [!NOTE]
+> Webhook通知を有効にしている場合、アプリ側のポップアップ・発話通知はされません。
 
-セッションを絞り込まないのであればこのプラグインはインストールする必要はありません。
+## Webhook通知
 
-### プラグインのインストール
+Slack / Discord の Incoming Webhook URL を設定画面に貼り付けることで、通知をチャットに送信できます。  
+「完了」「確認」カテゴリの通知のみ送信されます（コマンド実行は対象外）。
 
-```bash
-/plugin marketplace add kazakago/cc-mascot
-/plugin install cc-mascot@cc-mascot
-```
-
-### 使い方
-
-| コマンド        | 説明                               |
-| --------------- | ---------------------------------- |
-| `/speak-this`   | このセッションの発話のみに絞り込む |
-| `/speak-all`    | すべてのセッションの発話に戻す     |
-| `/speak-status` | 現在の発話フィルタ状態を確認する   |
-
-`/speak-this`でフィルタしてもそのセッションが終了されると自動的に解除されます。  
-CC Mascotの設定画面からもフィルタの状態確認・解除が可能です。
-
-また、これらのコマンド自体はCC Mascotが起動していなくても動作します。
+**Slack**: [api.slack.com/apps](https://api.slack.com/apps) でアプリを作成 → Incoming Webhooks を有効化  
+**Discord**: サーバー設定 → 連携サービス → ウェブフック → 新しいウェブフック
 
 ## 開発者向け
 
-### 全体的な仕組み
+### 仕組み
 
 ```
 Claude Code
-    ↓ JSONLログ出力
+    ↓ JSONL ログ出力
 ~/.claude/projects/**/*.jsonl
-    ↓ chokidar監視
-Electron Main Process
-    ↓ ログパース & 感情判定
-Electron Renderer Process
-    ↓ 音声合成API呼び出し
-音声合成エンジン
-    ↓ WAV音声データ
-Web Audio API
-    ↓ リップシンク解析
-VRMキャラクター
-    ↓
-発話 & 口の動き & 感情表現
+    ↓ chokidar 監視
+Electron メインプロセス
+    ↓ ログパース・感情判定・auto-approve 判定
+Electron レンダラープロセス
+    ↓ ポップアップ表示 + 音声合成 API 呼び出し
+AivisSpeech / VOICEVOX
 ```
 
 ### 開発環境のセットアップ
 
 ```bash
-git clone https://github.com/kazakago/cc-mascot.git
-cd cc-mascot
+git clone https://github.com/R2P2086/LLM-Notificator.git
+cd LLM-Notificator
 npm install
-npm run build
-npm run build:mic-monitor
+npm run build:mic-monitor  # マイクミュート機能を使う場合
 npm run dev
 ```
 
-`npm run build:mic-monitor` でネイティブヘルパー（マイク監視）をビルドします。  
-プラットフォームごとに以下の前提条件があります。
-
-- **macOS**: Xcode Command Line Tools（`xcode-select --install`）
-- **Windows**: Visual Studio Build Tools with C++（[インストール手順](https://visualstudio.microsoft.com/ja/visual-cpp-build-tools/)）
-
-> [!NOTE]
-> 配布しているバイナリに含まれるアニメーションファイル（`.vrma`）の一部はこのリポジトリには含まれていません。  
-> プライベートなサブモジュールとして依存関係を設定していますが、アクセス権がない場合は限られたアニメーションのみで動作します。
+**前提条件（マイクミュート機能）:**
+- macOS: Xcode Command Line Tools（`xcode-select --install`）
+- Windows: Visual Studio Build Tools with C++
 
 ### 技術スタック
 
-- **Electron**: デスクトップアプリケーション
-- **React + TypeScript + Vite**: フロントエンド
-- **Three.js + @react-three/fiber**: 3Dレンダリング
-- **@pixiv/three-vrm**: VRMサポート
-- **Tailwind CSS**: スタイリング
-- **chokidar**: ファイル監視
-- **electron-updater**: 自動更新
+| 技術 | 用途 |
+|---|---|
+| Electron | デスクトップアプリ化 |
+| React + TypeScript + Vite | フロントエンド |
+| Tailwind CSS | スタイリング |
+| chokidar | ログファイル監視 |
+| AivisSpeech / VOICEVOX | 音声合成（外部プロセス） |
+| IndexedDB | 画像ファイル永続化 |
+| electron-store | 設定永続化 |
+| electron-updater | 自動更新 |
 
 ### 参考
 
-- https://github.com/pixiv/three-vrm
-- https://aivis-project.com/
-- https://voicevox.hiroshiba.jp/
+- フォーク元: [cc-mascot](https://github.com/kazakago/cc-mascot) by kazakago（Apache License 2.0）
+- [AivisSpeech](https://aivis-project.com/)
+- [VOICEVOX](https://voicevox.hiroshiba.jp/)
 
 ## ライセンス
 
-- [Apache License 2.0](LICENSE)
+[Apache License 2.0](LICENSE)
 
-## 利用規約・プライバシーポリシー
-
-- [利用規約](https://kazakago.github.io/cc-mascot/terms.html)
-- [プライバシーポリシー](https://kazakago.github.io/cc-mascot/privacy.html)
+本プロジェクトは [cc-mascot](https://github.com/kazakago/cc-mascot)（Copyright 2026 kazakago, Apache License 2.0）をフォークして大幅に改変したものです。

@@ -1,821 +1,316 @@
-# CC Mascot - 技術ドキュメント
+# デスクトップマスコット通知アプリ 設計メモ
 
-## プロジェクト概要
+## コンセプト
 
-**Claude Codeを擬人化するためのVRMキャラクターシステム**
+Claude Code の作業完了・確認要求などのタイミングを検知し、  
+デスクトップマスコットがポップアップ＋ボイスで通知するアプリ。
 
-このアプリケーションは、Claude Codeの発言をリアルタイムで音声化し、3DのVRMキャラクターでビジュアル化するためのElectronアプリケーションです。
+チャットクライアントではなく「通知特化の常駐マスコット」。
 
-### コンセプト
+---
 
-- **オフライン動作**: ローカル環境で完結、インターネット接続不要
-- **日本語専用**: 日本語の音声合成とルールベース感情分析に最適化
-- **プラグイン不要**: Claude Codeのログファイル監視による自動連携（オプションでプラグイン連携も可能）
-- **シンプルな構成**: Electron + React + Three.js + VRM
+## 方針決定の経緯
 
-### 技術スタック
+### 検討した検知方式
 
-**コア技術:**
+| 方式 | 結論 |
+|---|---|
+| OCR による画面監視 | バックグラウンド時に検知不可。却下 |
+| ファイル監視（CLAUDE.md への追記） | ユーザー環境を汚す。却下 |
+| Claude Code ログファイル監視 | ユーザー環境への変更ゼロ・バックグラウンド対応。採用 |
 
-- Electron (デスクトップアプリ化)
-- React + TypeScript + Vite (フロントエンド)
-- Three.js + @react-three/fiber (3Dレンダリング)
-- @pixiv/three-vrm (VRMモデル対応)
-- Web Audio API (音声解析・リップシンク)
+### 参考プロジェクト
 
-**音声合成:**
+**cc-mascot**（kazakago 氏）  
+https://github.com/kazakago/cc-mascot
 
-- AivisSpeech / VOICEVOX (日本語TTS)
-- ポート: localhost:8564 (アプリが自動起動)
+Claude Code のログを監視してキャラクターが喋るデスクトップマスコット。  
+Apache License 2.0 でオープンソース公開されており、フォーク・改変・再配布が許可されている。
 
-**ファイル監視:**
+---
 
-- chokidar (ログファイル監視)
-- 対象: `~/.claude/projects/**/*.jsonl`
-
-**ネイティブヘルパー（macOS / Windows）:**
-
-- macOS: Swift CLI バイナリ (CoreAudio API)
-- Windows: C++ バイナリ (WASAPI)
-- マイク使用状態の検出
-
-**データ永続化:**
-
-- IndexedDB (VRMファイル)
-- Electron Store (音声設定、エンジン設定、キャラクター設定、各種トグル)
-
-**開発ツール:**
-
-- electron-mcp-server (Electronアプリのデバッグ・操作)
-- ポート: localhost:9222 (開発モード時のみ)
-
-## アーキテクチャ
-
-### システム構成図
+## ログ監視の仕組み
 
 ```
-┌──────────────────────┐
-│   Claude Code CLI    │
-└──────────┬───────────┘
-           │ ログ出力 (.jsonl)
-           ↓
-┌──────────────────────┐
-│  ~/.claude/projects/ │
-│  └─ **/*.jsonl       │
-└──────────┬───────────┘
-           │ chokidar監視 (リアルタイム差分読み取り)
-           ↓
-┌─────────────────────────────────────────────┐
-│  Electron Main Process                      │
-│  ├─ logMonitor.ts (ファイル監視)              │
-│  ├─ activeSessionMonitor.ts (セッションフィルタ) │
-│  ├─ claudeCodeParser.ts (JSONL解析)          │
-│  ├─ textFilter.ts (Markdown除去)             │
-│  ├─ ruleBasedEmotionClassifier.ts (感情判定) │
-│  └─ IPC送信 ('speak' イベント)                │
-└──────────┬──────────────────────────────────┘
-           │ IPC通信
-           ↓
-┌──────────────────────────────────────────┐
-│  Electron Renderer Process (Main Window) │
-│  ├─ useSpeech (音声合成キュー)             │
-│  ├─ useLipSync (リップシンク)              │
-│  ├─ useVRM (VRMモデル読み込み)             │
-│  ├─ useVRMAnimation (アニメーション)       │
-│  ├─ useBlink (まばたき)                   │
-│  ├─ useCursorTracking (視線・頭部追従)    │
-│  ├─ VRMAvatar (3D表示)                    │
-│  └─ SettingsPanel (設定UIオーバーレイ)    │
-└──────────┬───────────────────────────────┘
-           │ HTTP API
-           ↓
-┌─────────────────────────┐
-│  音声合成エンジン          │
-│  (AivisSpeech/VOICEVOX) │
-│  localhost:8564         │
-└─────────────────────────┘
-
-開発モード時の追加接続:
-
-┌──────────────────────────────────────────┐
-│  Claude Code (MCP Client)                │
-└──────────┬───────────────────────────────┘
-           │ WebSocket (DevTools Protocol)
-           │ localhost:9222
-           ↓
-┌──────────────────────────────────────────┐
-│  electron-mcp-server                     │
-│  ├─ ウィンドウ情報取得                      │
-│  ├─ スクリーンショット撮影                   │
-│  ├─ コンソールログ監視                      │
-│  └─ JavaScriptコマンド実行                 │
-└──────────────────────────────────────────┘
+Claude Code / Codex CLI
+    ↓ JSONL ログ出力
+~/.claude/projects/**/*.jsonl  /  ~/.codex/sessions/**/*.jsonl
+    ↓ chokidar で監視（LLM ごとのモニター）
+Electron メインプロセス（logMonitorUtils.ts 共有基盤）
+    ↓ ログパース・感情判定（LLM ごとのパーサー）
+マスコット表示 + ボイス再生
 ```
 
-### ウィンドウ構成
+- LLM ごとに独立したモニター（`logMonitor.ts` / `codexLogMonitor.ts`）とパーサー（`claudeCodeParser.ts` / `codexParser.ts`）
+- ファイル I/O・デバウンス・リスキャン等の共通処理は `logMonitorUtils.ts` に集約
+- 30 秒ごとに最新 JSONL ファイルをスキャンして新セッションを自動検出（LLMN 再起動不要）
+- Claude Code: `message.role === 'assistant'` かつ `message.type === 'message'` のテキストコンテンツのみ抽出
+- `tool_use` / `thinking` タイプのコンテンツは除外されるため「作業中」状態は自然にスキップ
+- Claude Code / Codex 側への変更・設定追加は一切不要
 
-**メインウィンドウ（透過・常に最前面・フレームレス）:**
+---
 
-- VRMキャラクター表示
-- リップシンク・感情表現
-- ドラッグ移動（楕円判定）
-- クリックスルー（キャラクター・設定パネル外はマウスイベント無視）
-- 右クリックで設定パネルを開閉
+## 対応環境
 
-**設定パネル（メインウィンドウ内オーバーレイ）:**
+| 環境 | 対応方法 |
+|---|---|
+| Windows ネイティブ（Claude Code CLI） | デフォルトパスで自動検出 |
+| Windows ネイティブ（VSCode 拡張） | 同上（同じログファイルを使用） |
+| WSL で Claude Code | `\\wsl$\...` パスをユーザーが手動設定 + 自動ポーリングモード |
+| macOS | デフォルトパスで自動検出 |
+| Claude Desktop | 対象外（ログ形式が異なる） |
+| OpenAI Codex CLI（Windows/macOS） | `~/.codex/sessions/**/*.jsonl` をポーリングで自動検出 |
 
-- `src/components/SettingsPanel.tsx` で実装
-- 右サイドパネル（幅400px、全画面高さ、半透明背景 + backdrop-blur）
-- スティッキーヘッダー（スクロールしても閉じるボタンが常に表示）
-- React内で直接状態共有（リレー型IPC不要）
-- セッションフィルタ状態表示・解除ボタン
-- エンジン選択（AivisSpeech/VOICEVOX/Custom）
-- スピーカー選択
-- 音量調整
-- マイク使用中ミュート設定
-- サブエージェント発言の包含設定
-- 起動時アップデート確認の有効/無効
-- キャラクターサイズ調整
-- VRMファイル選択
-- 待機アニメーション・発話アニメーションの有効/無効
-- テスト音声再生
+### WSL 対応の技術的補足
 
-## 主要コンポーネント
+WSL2 は 9P プロトコルの制約でファイル変更イベントが Windows 側に通知されない。  
+chokidar の `usePolling: true` で回避可能。WSL パスを検出したら自動切換えする。
 
-### 1. ログ監視システム
+```typescript
+const isWslPath = (p: string) =>
+  p.startsWith('\\\\wsl$') || p.startsWith('\\\\wsl.localhost');
 
-**electron/logMonitor.ts**
-
-設計方針:
-
-- `~/.claude/projects/**/*.jsonl` を監視（depth=1〜3、`includeSubAgents`設定で変動）
-- ファイルごとに位置を記録、差分のみ読み取り（既存ログは無視）
-- デバウンス処理（100ms）で過剰な処理を防ぐ
-- 非同期ストリーム読み込みで大容量ファイルにも対応
-
-データフロー:
-
-```
-ファイル変更検出 (chokidar)
-  ↓
-セッションフィルタ判定 (ファイルパスベース)
-  ↓ フィルタ外のファイルはファイル位置のみ進めてスキップ
-差分読み取り (readline)
-  ↓
-行ごとにJSONLパース (claudeCodeParser)
-  ↓
-テキストフィルタリング (textFilter.cleanTextForSpeech)
-  ↓
-文単位に分割 (textFilter.splitIntoSentences)
-  ↓
-文ごとに感情判定 (ruleBasedEmotionClassifier)
-  ↓
-文ごとにIPC送信 (speak イベント)
+chokidar.watch(watchPath, {
+  usePolling: isWslPath(watchPath),
+  interval: 1000,
+})
 ```
 
-### 2. JSONL解析・感情判定
+---
 
-**electron/parsers/claudeCodeParser.ts**
+## 機能要件
 
-解析ルール:
+### 通知ポップアップ
+- OS のネイティブ通知ではなくアプリ独自のポップアップ
+- キャラクターが画面端から「飛び出してくる」アニメーション
+- 短いアニメーション後に引っ込む（またはクリックで閉じる）
 
-- `message.role === "assistant"` のみ処理
-- `message.type === "message"` のみ処理
-- `content[].type === "text"` のみ抽出（thinking, tool_useは除外）
-
-**electron/services/ruleBasedEmotionClassifier.ts**
-
-感情判定アルゴリズム:
-
-- キーワード辞書（日本語）: happy, angry, sad, surprised, relaxed
-- 文末パターン（正規表現）: 女性言葉・中性的・丁寧・男性的に対応
-- ヒューリスティック: コードブロック→neutral、問題解決→happy
-- スコアリング: キーワード重み + 文末パターン重み
-- 長文対応: 100文字以上は重み調整
-- デフォルト: neutral
-
-**electron/filters/textFilter.ts**
-
-フィルタリング処理:
-
-- コードブロック除去（`...`）
-- XML/HTMLタグ除去（<...>）
-- Markdown記法除去（##, ---, |...|, >, -, \*）
-- URL除去
-- インラインコード除去（`...` → 中身のみ残す）
-- コロン除去
-
-文分割処理（splitIntoSentences）:
-
-- フィルタリング後のテキストを文単位に分割して個別に音声合成する
-- 分割ポイント: 句点（。）、感嘆符（！!）、疑問符（？?）、改行
-- 句読点は前の文に付与（後読み分割）
-- 空文字列は保持（分節の区切り情報として）、broadcastはスキップ
-- 分割後の各文に対して感情判定を再実行（文単位の方が精度が高い）
-
-### 3. 音声合成システム
-
-**src/hooks/useSpeech.ts**
-
-設計方針:
-
-- キュー構造で順序保証（オーバーラップなし）
-- 音声合成は並列実行（キューに入った時点で即座にAPI呼び出し）
-- 再生は必ずID順（合成が先に完了しても前のアイテムの合成完了を待つ）
-- AudioContext初期化（Electron用に自動resume）
-- エラー時もキュー継続
-- volumeScale適用（GainNode）
-
-順序保証の仕組み:
-
-- 各アイテムにインクリメンタルIDを付与
-- processQueueでキュー内の最小IDを確認
-- 最小IDがpending/synthesizing状態なら再生を開始せず待機
-- これにより短い文の合成が先に完了しても、長い文を追い越して再生されない
-
-Web Audio APIグラフ:
+### ボイス再生
+- 合成エンジン（AivisSpeech / VOICEVOX）をメインで使用
+- エンジンが未起動の場合は WAV ファイルにフォールバック（または無音）
+- ユーザーが外部 WAV/MP3 ファイルを差し替え可能（オプション）
+- 発話テキストは固定文字列を感情状態ごとに切り替え（ランダム選択）
 
 ```
-BufferSourceNode → AnalyserNode → GainNode → Destination
-                       ↓
-                  useLipSync
+complete: ["終わったよ！", "できたよ", "完了したよ"]
+waiting:  ["確認してね", "ちょっと見てほしいな", "どうする？"]
+error:    ["問題が起きたよ", "エラーが出たよ"]
 ```
 
-**src/services/voicevox.ts**
+### キャラクター
+- PNG/JPG/GIF/SVG/WebP の画像ファイルをユーザーが差し替え可能（IndexedDB に保存）
+- デフォルト画像: `public/notification-default.svg`（紫円キャラクター）
+- アニメーション GIF を設定すると通知中にアニメーションされる（static モード活用）
+- VRM / Three.js は廃止（リップシンク・表情変化なし）
 
-APIフロー:
+### ポップアップ表示設定
+
+| 設定 | 選択肢 | デフォルト |
+|---|---|---|
+| 位置（position） | bottom-right/left/center, top-right/left/center, right-center, left-center | bottom-right |
+| アニメーション（animation） | slide, pop, fade, static | slide |
+| 方向（direction） | primary, secondary | primary |
+
+- `direction` はコーナー位置（bottom-right 等）かつ slide/pop 時のみ有効
+- `primary` = 縦軸（上下）、`secondary` = 横軸（左右）
+
+### ボイス合成エンジン
+cc-mascot は VOICEVOX REST API を使用。AivisSpeech も同一 API 形式なので `baseUrl` 切り替えで対応可能。
+
+- **デフォルト推奨**: AivisSpeech（より自然な音声）、VOICEVOX に切り替え可
+- **エンジン未起動時**: 8 秒後に自動 dismiss（無音フォールバック）
+- **設定 UI**: エンジン選択 + スピーカーID + ベース URL
+
+cc-mascot との差分（**本プロジェクトは全文読み上げではなくポップアップ通知**）:
+- cc-mascot: Claude の返答テキストをそのまま読み上げ
+- 本プロジェクト: 感情状態に対応した固定フレーズを再生
+
+### 監視設定
+- デフォルトは `~/.claude/projects/` を自動検出（cc-mascot と同じパス。`sessions/` はセッションメタデータのみで会話ログではない）
+- ユーザーが監視フォルダを手動設定できる UI を用意（WSL 対応のため）
+
+---
+
+## 感情状態マッピング
+
+| 感情状態 | トリガー条件 | ポップアップ | ボイス |
+|---|---|---|---|
+| happy | `end_turn` + text あり | 表示 | 完了テキスト |
+| relaxed | 確認要求（AskUserQuestion / 承認待ちツール） | 表示 | 確認テキスト |
+| surprised | `Bash` auto-approve 実行 | 表示 | コマンド実行テキスト |
+| sad | （現状未使用・将来拡張用） | — | — |
+
+---
+
+## 通知トリガー条件
+
+`stop_reason` + ツール名で判定。`role: assistant` / `type: message` のエントリのみ対象。
+
+| 条件 | 感情 | フレーズ例 | 備考 |
+|---|---|---|---|
+| `end_turn` + text あり | `happy` | 終わったよ！ | ターン完了（エラー含む） |
+| `tool_use` + `AskUserQuestion` | `relaxed` | 確認してね | 明示的な質問 |
+| `tool_use` + `Bash` + auto-approve 外 | `relaxed` | 確認してね | 承認待ちコマンド |
+| `tool_use` + `Bash` + auto-approve 内 | `surprised` | コマンド実行！ | 自動承認コマンド |
+| `tool_use` + `Edit`/`Write`/`MultiEdit`/`NotebookEdit` + auto-approve 外 | `relaxed` | 確認してね | ファイル編集承認待ち |
+| `tool_use` + `mcp__*` + auto-approve 外 | `relaxed` | 確認してね | MCP ツール承認待ち |
+| それ以外 | — | なし | 無視 |
+
+**設計方針メモ**
+
+- `end_turn` はエラーキーワードの有無に関わらず常に `happy`。エラーが未解決のまま `end_turn` になることは実運用上ほぼなく、キーワードによる誤判定（「エラーを修正しました」→ sad）の方が問題になるため。
+- `sad` は現状未使用（将来の拡張用に感情定義は残している）。
+- `Edit`/`Write` 等のファイル編集ツールは `permissions.allow` に `Edit(*)` 等が入っていれば auto-approve 判定になり通知しない。"Allow once" での承認は settings.json に書かれないため毎回通知するが、これは正しい動作（ユーザーは毎回承認を求められているため）。
+- 許可リスト方式: `APPROVAL_REQUIRED_TOOLS`（Edit/Write/MultiEdit/NotebookEdit）と `mcp__` プレフィックス以外のツールはすべて無視。Read / Glob / Grep / WebSearch / ToolSearch / Agent 等は対象外。
+
+**auto-approve の判定**: `~/.claude/settings.json` の `permissions.allow` 配列を chokidar でリアルタイム監視。`Bash(*)` や `Bash(git *)` 等のパターンマッチも対応。実装: `electron/services/claudeSettingsMonitor.ts`
+
+---
+
+## 通知バッファリング仕様
+
+- **クールタイム**: 同一感情の通知は 30 秒以内に再発火しない
+- **キュー**: ポップアップ表示中に新規通知が来た場合、後着 1 件のみ保持（上書き）
+- **自動 dismiss**: 音声が鳴らなかった場合（エンジン未起動等）も 8 秒後に自動で引っ込む
+
+---
+
+## 技術スタック
+
+| 技術 | 用途 |
+|---|---|
+| Electron | デスクトップアプリ化 |
+| React + TypeScript | UI |
+| chokidar | ログファイル監視（WSL はポーリングモード） |
+| AivisSpeech / VOICEVOX | 音声合成（外部プロセス） |
+| IndexedDB | 画像ファイル永続化 |
+
+Three.js / VRM は廃止（通知特化のためリップシンク・3D表示不要）。
+
+---
+
+## cc-mascot からの差分（追加・変更点）
+
+| 機能 | cc-mascot | 本プロジェクト |
+|---|---|---|
+| 通知スタイル | 常駐して全発言を読み上げ | 作業完了・確認要求時のポップアップ通知 |
+| アプリアイコン | cc-mascot オリジナル | LLMN 独自 SVG（`scripts/build-icons.mjs` で PNG/ICO/ICNS 生成） |
+| キャラクター | VRM 3D モデル | PNG/JPG/GIF/SVG/WebP 画像 |
+| キャラクターサイズ | 400〜1200px | 80〜400px（デフォルト 200px） |
+| ポップアップ位置 | 画面端ドラッグ移動 | 8方向固定（設定で選択） |
+| アニメーション | CSS transition（固定） | slide / pop / fade / static（選択式） |
+| 方向設定 | なし | primary / secondary（コーナー位置用） |
+| 監視フォルダ設定 UI | なし（固定パス） | あり（WSL 対応のため） |
+| WSL 対応 | 非対応 | ポーリングモードで対応 |
+| 通知トリガー | 全発言の感情分類 | stop_reason + tool名 による allowlist 方式 |
+| 自動 dismiss | なし | 音声再生終了時 or 8 秒タイムアウト |
+| Codex 対応 | なし | `~/.codex/sessions/**/*.jsonl` 監視・パーサー実装済み |
+| セッション自動検出 | なし | 30 秒リスキャンで新セッションを自動切替（再起動不要） |
+
+---
+
+## フォーク・公開に関するライセンス対応
+
+cc-mascot は **Apache License 2.0**。以下を守れば改変・再配布が可能。
+
+1. 元の著作権表示を残す（`Copyright 2026 kazakago`）
+2. `LICENSE` ファイルを同梱する
+3. 変更したファイルに改変した旨を明示する
+4. README に元プロジェクトへのリンクを記載する
+
+---
+
+## 将来の拡張候補
+
+- 他の LLM ツール対応（Cline、Continue など）
+  - **Codex は実装済み**。ログパーサーをプロバイダーごとに差し替えられる設計が既に確立済み
+- Claude Code 以外のトリガー（ファイル監視、タスク完了など）
+- マイク使用中の自動ミュート（cc-mascot 実装済み、流用可能）
+- 多言語化（UI・デフォルトフレーズの英語対応）。英語 TTS エンジン対応も含む大規模対応。
+- ローカル音声ファイル再生（外部 TTS エンジン不要）
+  - 実装時は `POPUP_SHOW_DELAY_MS`（現在 300ms）を音声ソースごとに切り替える必要あり
+  - 外部 TTS エンジン：合成時間分のディレイが必要（約 300ms）
+  - ローカルファイル：即再生できるためディレイは 0 に設定する
+- VOICEROID 対応（棒読みちゃん経由）
+  - 棒読みちゃんの HTTP API（localhost:50080）は実装難易度は低い
+  - ただし VOICEROID 本体 + 棒読みちゃんの2アプリをユーザーが手動起動する前提になる（自動起動管理不可）
+  - COEIROINK 経由の VOICEVOX 互換ルートの方がユーザー体験は良い
+
+---
+
+## cc-mascot ソース調査結果（2026-04-20）
+
+### 判明した重要事項
+
+- **監視パス**: `~/.claude/projects/**/*.jsonl`（`sessions/` はセッションメタデータのみ）
+- **stop_reason は JSONL に存在しない**: 作業完了・確認要求の区別はテキスト内容の感情分類で行う
+- **感情分類**: ルールベース（6状態: neutral / happy / angry / sad / surprised / relaxed）。日本語キーワード辞書 + 文末パターン + ヒューリスティック
+- **ボイス**: VOICEVOX REST API。AivisSpeech も同一形式なので `baseUrl` 切り替えで対応可能
+- **マイク自動ミュート**: 独立バイナリ（mic-monitor.exe）+ IPC 通信。流用可能
+- **Electron ウィンドウ**: `transparent: true` / `alwaysOnTop: true` / `ignoreMouseEvents` の動的切り替え
+
+### 残作業チェックリスト
+- [x] 感情状態マッピングを stop_reason + tool名 の allowlist 方式に変更
+- [x] ポップアップ通知の実装（画像ベース、8方向 × 4アニメーション）
+- [x] AivisSpeech のスピーカーID（888753760 = まお/ノーマル）確認済み
+- [x] フォークリポジトリのアプリ名・appId を変更（cc-mascot → LLM-Notificator）
+- [x] VRM / Three.js を廃止し画像ポップアップに置き換え
+- [x] 音声未再生時の 8 秒自動 dismiss 実装
+
+---
+
+---
+
+## Codex ログ調査結果（2026-04-27）
+
+### ログファイルパス
 
 ```
-1. POST /audio_query?text=...&speaker=...
-   → AudioQuery オブジェクト取得
-
-2. POST /synthesis?speaker=...
-   Body: AudioQuery
-   → WAV ArrayBuffer取得
-
-3. AudioContext.decodeAudioData()
-   → AudioBuffer取得
+~/.codex/sessions/YYYY/MM/DD/rollout-<timestamp>-<uuid>.jsonl
 ```
 
-### 4. リップシンクシステム
+### イベント形式
 
-**src/hooks/useLipSync.ts**
+各行は JSON オブジェクト。確認済みイベント一覧（`sandbox = elevated` モード）:
 
-アルゴリズム:
+| `type` | `payload.type` | 説明 |
+|---|---|---|
+| `event_msg` | `task_started` | ターン開始 |
+| `event_msg` | `task_complete` | ターン完了 ← **happy トリガー** |
+| `event_msg` | `user_message` | ユーザー入力 |
+| `event_msg` | `agent_message` | エージェント応答 |
+| `event_msg` | `token_count` | トークン数 |
+| `event_msg` | `exec_command_end` | コマンド実行完了 |
+| `event_msg` | `patch_apply_end` | パッチ適用完了 |
+| `event_msg` | `thread_name_updated` | スレッド名更新 |
+| `response_item` | `function_call` | ツール呼び出し（引数に `sandbox_permissions` が入る場合あり） |
 
-```
-AnalyserNode.getByteTimeDomainData()
-  ↓
-RMS計算: sqrt(sum(sample^2) / length)
-  ↓
-正規化: min(rms * 4, 1.0)
-  ↓
-VRM表情 'aa' に適用
-```
+### 承認要求の検出
 
-設計ポイント:
+`response_item` + `function_call` のうち、`arguments` JSON に `sandbox_permissions === "require_escalated"` が含まれる行が承認待ちトリガー。
 
-- AnalyserNodeは音量調整前のデータを解析（volumeScale影響なし）
-- requestAnimationFrame でフレーム同期
-- fftSize=256（音声解析に十分）
-
-### 5. VRMキャラクターシステム
-
-**src/hooks/useVRM.ts**
-
-VRM読み込み:
-
-- VRMLoaderPlugin使用
-- VRM 0.x / 1.0 自動対応
-- GLB（VRM拡張付き）対応
-- デフォルト: `/models/aone.vrm`
-- カスタム: IndexedDBから読み込み
-
-表情制御:
-
-- リップシンク: `aa` 表情（0.0〜1.0）
-- 感情表現: happy, angry, sad, surprised, relaxed
-- まばたき: `blink` / `blinkLeft` / `blinkRight` 表情
-
-**src/hooks/useVRMAnimation.ts**
-
-アニメーション:
-
-- VRMA形式（VRM Animation）
-- VRMAnimationLoaderPlugin使用
-- ループ再生対応
-- デフォルト: `/animations/idle_loop.vrma`（待機ループモーション）
-- 待機アニメーション: `/animations/idle_anim1〜4.vrma`（ランダム再生）
-- 感情別アニメーション: `/animations/happy1.vrma`, `/animations/happy2.vrma`, `/animations/angry.vrma`, `/animations/sad.vrma`, `/animations/relaxed.vrma`
-- `enableIdleAnimations` / `enableSpeechAnimations` 設定で有効/無効を切替可能
-
-**src/hooks/useBlink.ts**
-
-まばたき制御:
-
-- ランダム間隔（2〜6秒）
-- アニメーション時間（0.15秒）
-- リップシンク・感情表現と独立
-
-**src/hooks/useCursorTracking.ts**
-
-カーソル追従（視線・頭部トラッキング）:
-
-- マウス位置に応じてキャラクターの目線と頭部が追従
-- VRM lookAt API（目線）と headボーン回転（頭部）の2段階制御
-- headボーンの位置をスクリーン座標に投影し、顔を基準とした相対追従
-- Bezier補間（lerp factor=0.08）で滑らかな動き
-- 感度設定: eyeSensitivity=0.4, headSensitivity=0.1（デフォルト）
-- 頭部回転制限: 上下25度、左右35度
-
-### 6. エンジン自動起動
-
-**electron/main.ts**
-
-設計方針:
-
-- アプリ起動時にエンジンプロセスを自動spawn
-- ポート8564で起動（--port 8564 --cors_policy_mode all）
-- 既にポートが使用中の場合はスキップ
-- アプリ終了時にエンジンプロセスを停止（SIGTERM → SIGKILL）
-- ポート解放待機（最大15秒）
-
-エンジンタイプ:
-
-- `aivis`: AivisSpeech（デフォルト）
-- `voicevox`: VOICEVOX
-- `custom`: カスタムパス
-
-設定保存:
-
-- Electron Store使用
-- `engineType`, `voicevoxEnginePath` を永続化
-
-### 7. ウィンドウ制御
-
-**electron/main.ts**
-
-メインウィンドウ:
-
-- サイズ: 可変（400〜1200px、正方形、アスペクト比1:1固定）
-- フレームレス・透過・常に最前面
-- ドラッグ移動: 楕円範囲内のみ（縦長楕円、radiusX=15%, radiusY=45%）
-- クリックスルー: 楕円外かつ設定パネル外はマウスイベント無視
-
-設定パネル:
-
-- メインウィンドウ内のオーバーレイとして実装（独立BrowserWindowではない）
-- 右クリックまたはトレイメニューで開閉
-- 状態管理はRenderer内で完結（リレー型IPC不要）
-
-IPC通信:
-
-- `speak`: メイン→レンダラー（ログ監視で検出したメッセージ）
-- `set-ignore-mouse-events`: レンダラー→メイン（クリックスルー制御）
-- `get/set-character-position`: レンダラー↔メイン（キャラクター位置）
-- `reset-character-position`: レンダラー→メイン（位置リセット）
-- `get/set-character-size`: レンダラー↔メイン（キャラクターサイズ・永続化のみ）
-- `reset-character-size`: レンダラー→メイン（サイズリセット）
-- `get-engine-type` / `set-engine-settings` / `reset-engine-settings`: レンダラー↔メイン（エンジン設定）
-- `get/set-mute-on-mic-active`: レンダラー↔メイン（ミュート設定・永続化＋ヘルパー制御）
-- `get-mic-active`: レンダラー→メイン（現在のマイク使用状態）
-- `mic-active-changed`: メイン→レンダラー（マイク使用状態変化）
-- `get-mic-monitor-available`: レンダラー→メイン（機能利用可否）
-- `get/set-include-sub-agents`: レンダラー↔メイン（サブエージェント設定）
-- `get/set-auto-update-check`: レンダラー↔メイン（起動時アップデート確認・永続化のみ）
-- `get/set-enable-idle-animations`: レンダラー↔メイン（待機アニメーション設定・永続化のみ）
-- `get/set-enable-speech-animations`: レンダラー↔メイン（発話アニメーション設定・永続化のみ）
-- `get/set-speaker-id`: レンダラー↔メイン（話者ID・永続化のみ）
-- `get/set-volume-scale`: レンダラー↔メイン（音量スケール・永続化のみ）
-- `get-active-session`: レンダラー→メイン（現在のセッションフィルタID取得）
-- `clear-active-session`: レンダラー→メイン（セッションフィルタ解除）
-- `active-session-changed`: メイン→レンダラー（セッションフィルタ状態変化）
-- `reset-all-settings`: レンダラー→メイン（全設定リセット）
-- `toggle-settings-panel`: メイン→レンダラー（トレイメニューからの設定パネル表示切替）
-- `open-devtools`: レンダラー→メイン（DevToolsを開く）
-- `devtools-state-changed`: メイン→レンダラー（DevTools状態変化通知）
-
-### 8. マイク使用中ミュート（macOS / Windows）
-
-**helpers/mic-monitor.swift**（macOS）
-
-macOSのCoreAudio HAL APIを使用してマイクの使用状態をリアルタイム監視するSwift CLIツール。
-
-仕組み:
-
-- `kAudioDevicePropertyDeviceIsRunningSomewhere` リスナーで全入力デバイスを監視
-- デバイスの追加/削除（ホットプラグ）にも対応
-- 状態変化時のみ stdout に JSON 行を出力: `{"micActive":true}` / `{"micActive":false}`
-- `RunLoop.main.run()` で常駐
-
-**helpers/mic-monitor.cpp**（Windows）
-
-WindowsのWASAPI（Windows Audio Session API）を使用してマイクの使用状態を監視するC++ CLIツール。
-
-仕組み:
-
-- 2秒ごとのポーリング式で全入力デバイスを監視
-- 状態変化時のみ stdout に JSON 行を出力: `{"micActive":true}` / `{"micActive":false}`
-
-ビルド方法:
-
-```bash
-# macOS / Windows で動作。プラットフォームに応じて自動でコンパイル
-npm run build:mic-monitor
-# macOS → resources/mic-monitor
-# Windows → resources/mic-monitor.exe
+```json
+{
+  "type": "response_item",
+  "payload": {
+    "type": "function_call",
+    "arguments": "{\"sandbox_permissions\":\"require_escalated\",\"justification\":\"...\",\"command\":\"...\"}"
+  }
+}
 ```
 
-ビルドスクリプト: `scripts/build-mic-monitor.mjs`
+この行は **ユーザーが承認する前**（約 15 秒前）に書き込まれるため、承認ダイアログ表示中に通知できる。
 
-- macOS: `swiftc -O -framework CoreAudio` でリリースビルド → `resources/mic-monitor`
-- Windows: MSVC (`cl.exe`) でリリースビルド → `resources/mic-monitor.exe`
-- Linux等その他OS: スキップ（バイナリ不要）
+### ポーリング必須の理由
 
-Electronとの統合（electron/main.ts）:
+Codex はデスクトップアプリとしてバックグラウンド動作するため、OS のファイル変更通知が適時に届かないケースがある。`usePolling: true, interval: 1000` により 1 秒間隔のポーリングで安定検出。
 
-- `muteOnMicActive` 設定が有効な場合のみヘルパーを起動（プライバシー配慮）
-- `child_process.spawn()` で起動、stdout を行単位でパース
-- アプリ終了時に SIGTERM で停止
-- バイナリが見つからない場合（Linux等）は機能を無効化
-- 設定画面の `getMicMonitorAvailable` IPC で UI 表示を制御
+---
 
-パッケージング:
+## 更新履歴
 
-- `package.json` の `extraResources` でアプリバンドルに含める
-- macOS: `resources/mic-monitor` → `process.resourcesPath/mic-monitor`
-- Windows: `resources/mic-monitor.exe` → `process.resourcesPath/mic-monitor.exe`
-- 開発時: `resources/` 配下を直接参照
-
-レンダラー側:
-
-- `useSpeech` hook に `isMicMuted` prop を追加
-- ミュート時は `gainNode.gain.value = 0`（発話処理・リップシンク・アニメーションは継続）
-- `volumeScale` と `isMicMuted` の両方をリアルタイム監視
-
-### 9. 自動更新
-
-**electron/autoUpdater.ts**
-
-- electron-updater を使用した自動更新機能
-- 起動5秒後に1回のみチェック（定期チェックなし）
-- `autoUpdateCheck` 設定が無効の場合はチェックをスキップ（完全オフライン動作）
-- ダウンロード確認ダイアログ → インストール確認ダイアログの2段階UI
-- 開発モードではスキップ（`app.isPackaged` で判定）
-- トレイメニューの「バージョン情報」から手動チェックも可能（設定に関わらず動作）
-
-### 10. システムトレイ
-
-**electron/main.ts**
-
-- アプリ起動時にシステムトレイにアイコンを表示
-- macOSではテンプレートアイコン対応
-- コンテキストメニュー: 「設定を開く」「バージョン情報」「終了」
-- バージョン情報ダイアログ: アップデート確認ボタン、ライセンス情報ボタン
-- ライセンス情報ウィンドウ: `npm run generate-licenses` で生成した `public/licenses.json` を表示
-
-### 11. MCPサーバー（開発用）
-
-**electron-mcp-server**
-
-開発モード時（`npm run dev`）にChrome DevTools Protocol経由でElectronアプリに接続し、デバッグ・操作を可能にします。
-
-### 12. セッションフィルタリング
-
-**electron/activeSessionMonitor.ts**
-
-Claude Codeの並列実行時に特定セッションのみを発話対象にフィルタリングする機能。
-
-仕組み:
-
-- `app.getPath('userData')/active-session` ファイルを chokidar で監視
-- ファイル内容はプレーンテキスト（セッションIDのみ）
-- ファイルが存在しない or 空 = 全セッション発話（デフォルト動作）
-- ファイルにセッションIDが書き込まれると、そのセッションのみ発話
-
-フィルタリングロジック（logMonitor.ts）:
-
-- ファイルパスのベースネーム（拡張子除去）がセッションIDと一致 → 通過
-- 親ディレクトリ名がセッションIDと一致（サブエージェント） → 通過
-- フィルタ外のファイルは `skipFileChanges()` でファイル位置のみ進めてスキップ（フィルタ解除後に過去の発話が再生されるのを防ぐ）
-
-操作方法:
-
-- Claude Codeプラグイン（`plugin/`）の `/cc-mascot:speak-this` スキルでセッション固定
-- `/cc-mascot:speak-all` スキルでフィルタ解除
-- 設定画面の解除ボタンでもフィルタ解除可能
-- SessionEndフックで自動解除（強制終了時は呼ばれない可能性あり）
-
-### 13. Claude Codeプラグイン
-
-**plugin/**
-
-セッションフィルタリング機能をClaude Codeから操作するためのプラグイン。
-
-構成:
-
-```
-plugin/
-├── .claude-plugin/
-│   └── plugin.json          # プラグインマニフェスト（name: "cc-mascot"）
-├── hooks/
-│   └── hooks.json           # SessionStart / SessionEnd フック定義
-├── scripts/
-│   ├── on-session-start.sh  # セッションIDをCLAUDE_ENV_FILEに保存
-│   └── on-session-end.sh    # active-sessionファイルの一致確認+削除
-└── skills/
-    ├── speak-this/
-    │   └── SKILL.md          # /cc-mascot:speak-this スキル
-    ├── speak-all/
-    │   └── SKILL.md          # /cc-mascot:speak-all スキル
-    └── speak-status/
-        └── SKILL.md          # /cc-mascot:speak-status スキル
-```
-
-フック:
-
-- SessionStart: stdinのJSONから `session_id` を取得し、`CLAUDE_ENV_FILE` に `CC_MASCOT_SESSION_ID` として保存
-- SessionEnd: `active-session` ファイルの内容が終了セッションと一致すれば削除（ベストエフォート）
-
-スキル:
-
-- `/cc-mascot:speak-this`: `$CC_MASCOT_SESSION_ID` を active-session ファイルに書き込み
-- `/cc-mascot:speak-all`: active-session ファイルを削除
-- `/cc-mascot:speak-status`: 現在の発話フィルタ状態を確認（全セッション or 特定セッション）
-
-プラットフォーム対応:
-
-- macOS / Windows対応（シェルスクリプト内で `uname` によるOS判定・パス分岐）
-- WindowsではClaude CodeがGit Bash経由でhookを実行するため、`.sh` スクリプトがそのまま動作する
-- スキル（SKILL.md）はOS別のコマンド例を記載し、AIが実行時にOSを判別して適切なコマンドを選択する
-
-インストール方法:
-
-```bash
-# 開発中のローカルテスト
-claude --plugin-dir ./plugin
-
-# マーケットプレイス経由
-/plugin marketplace add kazakago/cc-mascot
-/plugin install cc-mascot@cc-mascot
-```
-
-## データストレージ
-
-### IndexedDB（Renderer Process）
-
-データベース名: `cc-mascot-db`
-オブジェクトストア: `vrm-models`
-キー: `current-vrm`
-値: VRMファイル（Blob）
-
-用途: VRMファイルは5〜50MBで大容量のため、IndexedDBに保存
-
-### Electron Store（Main Process）
-
-| キー                     | 型      | デフォルト | 説明                                    |
-| ------------------------ | ------- | ---------- | --------------------------------------- |
-| `engineType`             | string  | "aivis"    | エンジンタイプ（aivis/voicevox/custom） |
-| `voicevoxEnginePath`     | string  | undefined  | カスタムエンジンパス                    |
-| `characterSize`          | number  | 800        | キャラクターサイズ（400〜1200）         |
-| `characterPosition`      | object  | undefined  | キャラクター位置 { x, y }               |
-| `muteOnMicActive`        | boolean | false      | マイク使用中にミュートするか            |
-| `includeSubAgents`       | boolean | false      | サブエージェントの発言を含めるか        |
-| `enableIdleAnimations`   | boolean | true       | 待機アニメーションの有効/無効           |
-| `enableSpeechAnimations` | boolean | true       | 発話アニメーションの有効/無効           |
-| `speakerId`              | number  | 888753760  | 話者ID（AivisSpeechデフォルト）         |
-| `volumeScale`            | number  | 1.0        | 音量スケール（0.0〜2.0）                |
-| `autoUpdateCheck`        | boolean | true       | 起動時にアップデートを確認するか        |
-
-### 14. ランディングページ（GitHub Pages）
-
-**docs/**
-
-GitHub Pagesで公開しているプロダクトLP。Electronアプリ本体とは独立した静的サイト。
-
-公開URL: `https://kazakago.github.io/cc-mascot/`
-
-技術スタック:
-
-- 素のHTML + Tailwind CSS CDN (v4) + vanilla JavaScript
-- Google Fonts (M PLUS Rounded 1c)
-- ビルドプロセスなし（静的ファイルをそのまま配信）
-
-ページ構成:
-
-- `index.html`: メインLP（特徴紹介・仕組み説明・スクリーンショット・ダウンロード導線）
-- `terms.html`: 利用規約
-- `privacy.html`: プライバシーポリシー
-- `style.css`: スタイル（グラデーション背景・フェードインアニメーション・波区切り）
-- `script.js`: スクロールフェードイン・動画再生制御・GitHub API経由のダウンロードURL解決
-- `icon.png` / `screenshot.jpg` / `demo.mp4`: 画像・動画素材
-
-特記事項:
-
-- ダウンロードボタンは GitHub Releases API からmacOS(.dmg)・Windows(.exe)の最新アセットURLを動的に解決
-- API失敗時はフォールバックとして `releases/latest` ページにリンク
-
-## ディレクトリ構造
-
-```
-cc-mascot/
-├── electron/          # Electronメインプロセス（ログ監視・JSONL解析・感情判定・IPC）
-├── helpers/           # ネイティブヘルパーソース（マイク監視 Swift/C++）
-├── scripts/           # ビルドスクリプト（ネイティブヘルパー・コード署名）
-├── resources/         # パッケージングリソース（アイコン・コンパイル済みバイナリ）
-├── src/               # Electronレンダラープロセス（React + Three.js + VRM）
-├── public/            # 静的アセット（VRMモデル・VRMAアニメーション）
-├── plugin/            # Claude Codeプラグイン（セッションフィルタリング）
-├── docs/              # GitHub Pages LP（静的サイト・利用規約・プライバシーポリシー）
-├── build/             # パッケージング設定（entitlements等）
-└── package.json
-```
-
-## パフォーマンス最適化
-
-### 音声解析
-
-- AnalyserNode fftSize=256（必要最小限）
-- requestAnimationFrame使用（ブラウザ最適化）
-
-### ファイル監視
-
-- depth=1〜3（`includeSubAgents`設定で変動）
-- デバウンス100ms（過剰な処理防止）
-- 差分読み取り（全体読み込み回避）
-
-### VRM読み込み
-
-- 非同期読み込み
-- 単一インスタンス（メモリ節約）
-
-### メモリ管理
-
-- AudioBuffer: 再生後自動GC
-- VRMモデル: 単一インスタンスキャッシュ
-- IPC通信: Electron内部で自動管理
-
-## テストチェックリスト
-
-実装変更時の確認項目:
-
-- [ ] エンジンが自動起動するか
-- [ ] ログ監視が動作するか（Claude Code応答で喋るか）
-- [ ] 感情判定が正しく動作するか
-- [ ] リップシンクが音声に同期するか
-- [ ] まばたきが自然か
-- [ ] 音声キューが順序通りに処理されるか
-- [ ] 設定変更が保持されるか
-- [ ] VRMファイルが正しく読み込まれるか
-- [ ] ウィンドウドラッグが動作するか
-- [ ] クリックスルーが動作するか
-- [ ] 設定パネルが開閉するか（右クリック・トレイメニュー）
-- [ ] テスト音声が再生されるか
-
-### セッションフィルタリング関連
-
-- [ ] active-sessionファイルにUUIDを書き込むと、そのセッションのログのみ発話されるか
-- [ ] active-sessionファイルを削除すると全セッションの発話に戻るか
-- [ ] フィルタ中に他セッションの発話がキューに溜まらず握りつぶされるか
-- [ ] 設定画面にフィルタ状態が表示されるか
-- [ ] 設定画面の解除ボタンでフィルタが解除されるか
-- [ ] 「全設定リセット」でフィルタが解除されるか
-- [ ] プラグイン: `/cc-mascot:speak-this` でセッション固定されるか
-- [ ] プラグイン: `/cc-mascot:speak-all` でフィルタ解除されるか
-
-### マイクミュート関連（macOS / Windows）
-
-- [ ] `npm run build:mic-monitor` でネイティブバイナリがコンパイルされるか
-- [ ] 設定画面に「マイク使用中はミュートにする」チェックボックスが表示されるか
-- [ ] チェックを入れるとmic-monitorヘルパーが起動するか（mainプロセスログで確認）
-- [ ] 他アプリがマイク使用中に発話音声がミュートになるか（リップシンクは継続）
-- [ ] マイク使用終了でミュートが解除されるか
-- [ ] チェックを外すとmic-monitorヘルパーが停止するか
-- [ ] 設定がアプリ再起動後も保持されるか
-
-### MCPサーバー関連（開発モード時のみ）
-
-- [ ] リモートデバッグポート9222が有効化されているか
-- [ ] MCPサーバーがElectronアプリに接続できるか
-- [ ] ウィンドウ情報が正しく取得できるか
-- [ ] スクリーンショットが撮影できるか
-- [ ] コンソールログが監視できるか
-- [ ] JavaScriptコマンドが実行できるか
-
-## タスク完了時のチェックリスト
-
-コード編集作業完了時は、以下を実行して品質を確認すること:
-
-### 必須（変更のたびに実行）
-
-- [ ] テスト追加の検討 - 変更した箇所に関連するテストが必要か考える
-- [ ] ドキュメント更新の検討 - README.md,CLAUDE.md,.claude/rules/に追記・編集するものがないか検討し、あればユーザーに提案する
-- [ ] `npm run lint` - コード品質チェック
-- [ ] `npm run build` - ビルド & 型チェック
-- [ ] `npm run format` - コードフォーマット
-
-両コマンドでエラー（exit code 0）であることを確認すること。
-
-### 推奨（重要なロジックを変更した場合）
-
-- [ ] テスト追加 - 重要なロジック（バグを踏んだら危険な箇所）を変更した場合はテストを書く
-- [ ] `npm run test:run` - 既存テストが壊れていないか確認
-
-## 開発コマンド
-
-```bash
-# 依存関係インストール
-npm install
-
-# ネイティブヘルパービルド（初回必須）
-# macOS: Swift + CoreAudio（要Xcode Command Line Tools）
-# Windows: C++ + MSVC（要Visual Studio Build Tools）
-npm run build:mic-monitor
-
-# 開発モード起動（HMR有効、MCPサーバー接続可能）
-npm run dev
-
-# Lint実行
-npm run lint
-
-# フォーマット実行
-npm run format
-
-# フォーマットチェック
-npm run format:check
-
-# テスト実行
-npm test:run
-
-# テストカバレッジ
-npm run test:coverage
-
-# ビルド
-npm run build
-
-# パッケージング（dmg/exe/AppImage）
-# ※ネイティブヘルパーのビルドも自動実行される
-npm run package
-```
-
-## 開発環境のセットアップ
-
-### 共通
-
-```bash
-npm install
-npm run build:mic-monitor  # 初回必須
-```
-
-### アニメーションアセットのセットアップ
-
-一部のVRMAアニメーションファイルはプライベートリポジトリ
-[kazakago/cc-mascot-animations](https://github.com/kazakago/cc-mascot-animations) で管理されており、
-Gitサブモジュールとして `public/animations/proprietary/` に直接配置されます。
-
-アニメーションのファイルリストはアプリ起動時に Main プロセスが以下の両ディレクトリをスキャンして IPC 経由で取得します。
-
-- `public/animations/<category>/` （公開アニメーション）
-- `public/animations/proprietary/<category>/` （プライベートアニメーション）
-
-> **注意:** プライベートリポジトリへのアクセス権がない場合は公開アニメーションのみ動作します。
-
-### macOS固有の要件
-
-マイク監視機能を使用する場合、Xcode Command Line Toolsが必要：
-
-```bash
-xcode-select --install
-```
-
-### Windows固有の要件
-
-マイク監視機能を使用する場合、Visual Studio Build Tools with C++が必要：
-
-```powershell
-winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-```
-
-**注意:** インストール後、新しいターミナルで `npm run build:mic-monitor` を実行してください。
-
-## 主要依存関係
-
-**本番:**
-
-- `@pixiv/three-vrm` / `@pixiv/three-vrm-animation` (VRMモデル・アニメーション)
-- `@react-three/fiber` / `@react-three/drei` (React用Three.jsバインディング)
-- `react` / `react-dom` (UIフレームワーク)
-- `three` (3Dレンダリング)
-- `chokidar` (ファイル監視)
-- `electron-store` (設定永続化)
-- `electron-updater` (自動更新)
-
-**開発:**
-
-- `electron` / `electron-builder` (デスクトップアプリ化・パッケージング)
-- `electron-mcp-server` (開発用デバッグ)
-- `vite` / `vite-plugin-electron` (ビルドツール)
-- `vitest` (テスト)
-- `tailwindcss` (スタイリング)
-
-バージョンは `package.json` を参照してください。
+- 2026-04-20: 要件を精緻化。cc-mascotソース調査結果を反映（stop_reason非存在・監視パス修正・感情分類方針確定）
+- 2026-04-21: Approach B 実装（stop_reason + tool名による直接検出）。Bash auto-approve判定、claudeSettingsMonitor追加。
+- 2026-04-22: VRM/Three.js廃止・画像ポップアップ化。8方向×4アニメーション×direction設定。auto-dismiss 8秒タイムアウト。APPROVAL_REQUIRED_TOOLS allowlist方式に変更。
+- 2026-04-23: permissions.ask対応（askリストのコマンドはrelaxed判定）。Bashコマンド文字列をJSONLから抽出してisToolAllowedに渡す実装。通知モード3択（両方/ポップアップのみ/発話のみ）追加。「キャラクターを隠す」トレイ項目を削除しトレイから通知モード選択可能に。Webhook通知機能追加（Slack・Discord・Teams未検証）、Webhook有効時はアプリ通知を抑制する排他設計。ボタン押下フィードバック（active:scale-95）追加。
+- 2026-04-27: アプリアイコン刷新（LLMN 独自 SVG デザイン、`scripts/build-icons.mjs` で PNG/ICO/ICNS 生成）。OpenAI Codex 対応追加（`electron/parsers/codexParser.ts` + `electron/codexLogMonitor.ts`、`~/.codex/sessions/**/*.jsonl` をポーリング監視）。ログ監視共通基盤 `electron/logMonitorUtils.ts` 追加（DEBOUNCE_MS・RESCAN_INTERVAL_MS・BroadcastFn・initializeFilePosition・skipFileChanges・readNewLines・processFileChanges を共有）。Claude Code・Codex 両モニターに 30 秒リスキャンによるセッション自動検出を実装（LLMN 再起動不要）。設定パネルのドラッグ機能を固定配置に戻し。

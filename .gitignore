@@ -33,3 +33,5 @@ mic-monitor.obj
 
 # Claude
 .claude/plans
+.claude/rules
+
