@@ -45,7 +45,7 @@
 |---|---|
 | Windows（Claude Code CLI / VSCode拡張） | ✅ |
 | Windows（Codex CLI / VSCode拡張） | ✅ |
-| WSL で Claude Code | ⚠️（ターン完了通知のみ正常・承認待ち通知は承認後に遅延発火・手動パス設定必須） |
+| WSL で Claude Code | ⚠️（ターン完了通知のみ対応・承認待ち通知は未対応・手動パス設定必須） |
 | macOS | ❓（未確認） |
 | Claude Desktop | ❌（ログ形式が異なる） |
 
