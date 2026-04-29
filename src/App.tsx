@@ -1,304 +1,124 @@
-import { useRef, useCallback, useState, useEffect, useMemo } from "react";
-import { Canvas } from "@react-three/fiber";
-import { AgXToneMapping } from "three";
-import { Scene } from "./components/Scene";
-import { VRMAvatar } from "./components/VRMAvatar";
-import type { VRMAvatarHandle } from "./components/VRMAvatar";
+// Modified from the original cc-mascot project by kazakago.
+// Original: https://github.com/kazakago/cc-mascot (Apache License 2.0)
+import { useRef, useCallback, useState, useEffect } from "react";
 import SettingsPanel from "./components/SettingsPanel";
+import CharacterPopup, { computePopupRect } from "./components/CharacterPopup";
 import { useSpeech } from "./hooks/useSpeech";
-import { useLipSync } from "./hooks/useLipSync";
-import { loadVRMFile, createBlobURL, deleteVRMFile } from "./utils/vrmStorage";
+import { useNotificationPopup } from "./hooks/useNotificationPopup";
+import { loadImageFile, createImageBlobURL, deleteImageFile } from "./utils/imageStorage";
 import type { Emotion } from "./types/emotion";
-import type { AnimationManifest } from "./global";
-import type { CursorTrackingOptions } from "./hooks/useCursorTracking";
+import type { CustomPhrases } from "./constants/notificationPhrases";
+import type { PopupPosition, PopupAnimation, PopupDirection, NotificationMode } from "./types/popup";
 
-// Helper function to check if point is inside ellipse
-function isInsideEllipse(
-  x: number,
-  y: number,
-  centerX: number,
-  centerY: number,
-  radiusX: number,
-  radiusY: number,
-): boolean {
-  const dx = x - centerX;
-  const dy = y - centerY;
-  // Ellipse equation: (x/a)^2 + (y/b)^2 <= 1
-  return (dx * dx) / (radiusX * radiusX) + (dy * dy) / (radiusY * radiusY) <= 1;
-}
-
-// クリック可能領域（楕円）のパラメータ
-// キャラクターの表示位置に合わせて調整（頭: 画面上21%, 足: 画面外下）
-const ELLIPSE_RADIUS_X = 0.15; // コンテナ幅に対する横半径の比率
-const ELLIPSE_RADIUS_Y = 0.45; // コンテナ高さに対する縦半径の比率
-const ELLIPSE_CENTER_Y_OFFSET = 0.03; // コンテナ中心からの下方オフセット比率
-
-const DEFAULT_VRM_URL = "./models/aone.vrm";
-const FALLBACK_IDLE_LOOP_URL = "./animations/idle_loop.vrma";
-const IDLE_RANDOM_MIN_INTERVAL = 30000; // 30秒
-const IDLE_RANDOM_MAX_INTERVAL = 60000; // 60秒
+const DEFAULT_IMAGE_URL = "./notification-default.svg";
 const VOICEVOX_BASE_URL = "http://localhost:8564";
 
-// Settings panel width constant for click-through calculation
-const SETTINGS_PANEL_WIDTH = 400;
-
 function App() {
-  const avatarRef = useRef<VRMAvatarHandle>(null);
   const [speakerId, setSpeakerId] = useState(888753760);
   const [volumeScale, setVolumeScale] = useState(1.0);
-  const [vrmUrl, setVrmUrl] = useState<string>(DEFAULT_VRM_URL);
-  const animationManifestRef = useRef<AnimationManifest | null>(null);
-  const [currentAnimationUrl, setCurrentAnimationUrl] = useState<string>(FALLBACK_IDLE_LOOP_URL);
-  const [currentEmotion, setCurrentEmotion] = useState<Emotion>("neutral");
-  const [containerCenter, setContainerCenter] = useState({ x: 0, y: 0 });
-  const [containerSize, setContainerSize] = useState(800);
+  const [imageUrl, setImageUrl] = useState<string>(DEFAULT_IMAGE_URL);
+  const [containerSize, setContainerSize] = useState(200);
+  const [screenSize, setScreenSize] = useState({ width: 1920, height: 1080 });
   const [isInitialized, setIsInitialized] = useState(false);
   const [devToolsOpen, setDevToolsOpen] = useState(false);
-  const [headPosition, setHeadPosition] = useState<{ x: number; y: number } | null>(null);
-  const [muteOnMicActive, setMuteOnMicActive] = useState(true);
+  const [muteOnMicActive, setMuteOnMicActive] = useState(false);
   const [micActive, setMicActive] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [enableIdleAnimations, setEnableIdleAnimations] = useState(true);
-  const [enableSpeechAnimations, setEnableSpeechAnimations] = useState(true);
-  const [isCharacterVisible, setIsCharacterVisible] = useState(true);
+  const [customPhrases, setCustomPhrases] = useState<CustomPhrases | null>(null);
+  const [popupPosition, setPopupPosition] = useState<PopupPosition>("bottom-right");
+  const [popupAnimation, setPopupAnimation] = useState<PopupAnimation>("slide");
+  const [popupDirection, setPopupDirection] = useState<PopupDirection>("primary");
+  const [notificationMode, setNotificationMode] = useState<NotificationMode>("both");
+  const [webhookService, setWebhookService] = useState<string>("none");
 
-  // ランダム待機アニメーション用ref
-  const isCharacterVisibleRef = useRef(true);
-  const isSpeakingRef = useRef(false);
-  const lastIdleAnimTimeRef = useRef(0);
-  const nextIdleIntervalRef = useRef(0);
-  const enableIdleAnimationsRef = useRef(true);
-  const enableSpeechAnimationsRef = useRef(true);
   const showSettingsRef = useRef(false);
-
-  // Keep refs in sync with state
-  useEffect(() => {
-    showSettingsRef.current = showSettings;
-  }, [showSettings]);
-
-  useEffect(() => {
-    isCharacterVisibleRef.current = isCharacterVisible;
-    if (!isCharacterVisible) {
-      // 非表示になった瞬間に即座にクリックスルーを強制する
-      // （次のmousemoveまで待つと非表示直後にイベントを拾ってしまうため）
-      window.electron?.setIgnoreMouseEvents?.(true);
-    }
-  }, [isCharacterVisible]);
-
-  // 初回マウント時にランダム待機タイマーを初期化
-  useEffect(() => {
-    lastIdleAnimTimeRef.current = Date.now();
-    nextIdleIntervalRef.current =
-      IDLE_RANDOM_MIN_INTERVAL + Math.random() * (IDLE_RANDOM_MAX_INTERVAL - IDLE_RANDOM_MIN_INTERVAL);
-  }, []);
-
-  // アニメーションマニフェストをロード
-  useEffect(() => {
-    window.electron?.getAnimationManifest?.().then((manifest) => {
-      animationManifestRef.current = manifest;
-      setCurrentAnimationUrl(manifest.idle_loop);
-    });
-  }, []);
-
-  // Cursor tracking settings (fixed values)
-  const cursorTrackingOptions: Partial<CursorTrackingOptions> = useMemo(
-    () => ({
-      enabled: true,
-      eyeSensitivity: 0.4,
-      headSensitivity: 0.1,
-      containerSize: containerSize,
-      containerX: containerCenter.x - containerSize / 2,
-      containerY: containerCenter.y - containerSize / 2,
-    }),
-    [containerSize, containerCenter.x, containerCenter.y],
-  );
-
-  // Refs for event handlers (updated immediately on state changes)
-  const containerCenterRef = useRef(containerCenter);
   const containerSizeRef = useRef(containerSize);
+  const screenSizeRef = useRef(screenSize);
+  const popupPositionRef = useRef(popupPosition);
+  const popupStateActiveRef = useRef(false);
 
-  // Update cursor tracking when container position or size changes
-  useEffect(() => {
-    if (avatarRef.current?.updateCursorTracking) {
-      avatarRef.current.updateCursorTracking({
-        containerSize: containerSize,
-        containerX: containerCenter.x - containerSize / 2,
-        containerY: containerCenter.y - containerSize / 2,
-      });
-    }
-  }, [containerSize, containerCenter.x, containerCenter.y]);
+  useEffect(() => { showSettingsRef.current = showSettings; }, [showSettings]);
+  useEffect(() => { containerSizeRef.current = containerSize; }, [containerSize]);
+  useEffect(() => { screenSizeRef.current = screenSize; }, [screenSize]);
+  useEffect(() => { popupPositionRef.current = popupPosition; }, [popupPosition]);
 
-  // Initialize character position and size from Electron Store
+  // Initialize screen size and popup size from Electron Store
   useEffect(() => {
     const init = async () => {
       const electron = window.electron;
-      if (!electron?.getCharacterSize || !electron?.getCharacterPosition || !electron?.getScreenSize) {
+      if (!electron?.getCharacterSize || !electron?.getScreenSize) {
         setIsInitialized(true);
         return;
       }
-
-      const [savedSize, savedPosition, screenSize] = await Promise.all([
+      const [savedSize, screen] = await Promise.all([
         electron.getCharacterSize(),
-        electron.getCharacterPosition(),
         electron.getScreenSize(),
       ]);
-
-      const size = savedSize || 800;
+      const size = savedSize || 200;
       setContainerSize(size);
       containerSizeRef.current = size;
-
-      if (savedPosition) {
-        // savedPosition is top-left, convert to center
-        const center = {
-          x: savedPosition.x + size / 2,
-          y: savedPosition.y + size / 2,
-        };
-        setContainerCenter(center);
-        containerCenterRef.current = center;
-      } else {
-        // Default: center-bottom of screen
-        const center = {
-          x: Math.round(screenSize.width / 2),
-          y: Math.round(screenSize.height - size / 2),
-        };
-        setContainerCenter(center);
-        containerCenterRef.current = center;
-      }
-
+      setScreenSize(screen);
+      screenSizeRef.current = screen;
       setIsInitialized(true);
     };
     init();
   }, []);
 
-  // Load VRM from IndexedDB on mount
+  // Load popup appearance settings
   useEffect(() => {
-    loadVRMFile()
-      .then((file) => {
-        if (file) {
-          const url = createBlobURL(file);
-          setVrmUrl(url);
-        }
-      })
-      .catch((err) => {
-        console.error("Failed to load VRM file:", err);
-      });
+    window.electron?.getPopupPosition?.().then((v) => { if (v) { setPopupPosition(v as PopupPosition); popupPositionRef.current = v as PopupPosition; } });
+    window.electron?.getPopupAnimation?.().then((v) => { if (v) setPopupAnimation(v as PopupAnimation); });
+    window.electron?.getPopupDirection?.().then((v) => { if (v) setPopupDirection(v as PopupDirection); });
+    window.electron?.getNotificationMode?.().then((v) => { if (v) setNotificationMode(v as NotificationMode); });
+    window.electron?.getWebhookService?.().then((v) => { if (v) setWebhookService(v); });
   }, []);
 
-  // Load speaker and volume settings from Electron Store
+  // Load custom image from IndexedDB
+  useEffect(() => {
+    loadImageFile()
+      .then((file) => { if (file) setImageUrl(createImageBlobURL(file)); })
+      .catch((err) => console.error("[App] Failed to load image:", err));
+  }, []);
+
+  // Load speaker and volume settings
   useEffect(() => {
     window.electron?.getSpeakerId?.().then(setSpeakerId);
     window.electron?.getVolumeScale?.().then(setVolumeScale);
   }, []);
 
-  // Load muteOnMicActive setting, initial mic state, and listen for changes
+  // Load custom phrases
+  useEffect(() => {
+    window.electron?.getNotificationPhrases?.().then(setCustomPhrases);
+  }, []);
+
+  // Mic state
   useEffect(() => {
     window.electron?.getMuteOnMicActive?.().then(setMuteOnMicActive);
     window.electron?.getMicActive?.().then(setMicActive);
-
-    const cleanupMic = window.electron?.onMicActiveChanged?.((active) => {
-      console.log(`[App] Mic active: ${active}`);
-      setMicActive(active);
-    });
-
-    return () => {
-      cleanupMic?.();
-    };
+    const cleanup = window.electron?.onMicActiveChanged?.((active) => setMicActive(active));
+    return () => cleanup?.();
   }, []);
 
-  // Load motion settings from Electron Store
+  // Tray events
   useEffect(() => {
-    window.electron?.getEnableIdleAnimations?.().then((value) => {
-      setEnableIdleAnimations(value);
-      enableIdleAnimationsRef.current = value;
-    });
-    window.electron?.getEnableSpeechAnimations?.().then((value) => {
-      setEnableSpeechAnimations(value);
-      enableSpeechAnimationsRef.current = value;
-    });
+    const cleanup = window.electron?.onNotificationModeChanged?.((mode) => setNotificationMode(mode as NotificationMode));
+    return () => cleanup?.();
   }, []);
-
-  // Listen for toggle-character-visibility from tray menu
   useEffect(() => {
-    const cleanup = window.electron?.onToggleCharacterVisibility?.((visible) => {
-      setIsCharacterVisible(visible);
-    });
-
-    return () => {
-      cleanup?.();
-    };
+    const cleanup = window.electron?.onToggleSettingsPanel?.(() => setShowSettings((prev) => !prev));
+    return () => cleanup?.();
   }, []);
-
-  // Listen for toggle-settings-panel from tray menu
   useEffect(() => {
-    const cleanup = window.electron?.onToggleSettingsPanel?.(() => {
-      setShowSettings((prev) => !prev);
-    });
+    if (showSettings) window.electron?.setIgnoreMouseEvents(false);
+  }, [showSettings]);
 
-    return () => {
-      cleanup?.();
-    };
-  }, []);
+  const dismissRef = useRef<(() => void) | null>(null);
 
-  const handleMouthValueChange = useCallback((value: number) => {
-    avatarRef.current?.setMouthOpen(value);
-  }, []);
-
-  const { startLipSync, stopLipSync } = useLipSync({
-    onMouthValueChange: handleMouthValueChange,
-  });
-
-  const handleSpeechStart = useCallback(
-    (analyser: AnalyserNode, emotion: Emotion) => {
-      isSpeakingRef.current = true;
-      // Set emotion when speech actually starts (after VOICEVOX API processing)
-      setCurrentEmotion(emotion);
-      avatarRef.current?.setEmotion(emotion);
-
-      // Select animation based on emotion (randomly choose from array)
-      if (enableSpeechAnimationsRef.current && emotion !== "neutral") {
-        const animationUrls = animationManifestRef.current?.emotions[emotion];
-        if (animationUrls && animationUrls.length > 0) {
-          const randomIndex = Math.floor(Math.random() * animationUrls.length);
-          const animationUrl = animationUrls[randomIndex];
-          setCurrentAnimationUrl(animationUrl);
-        }
-      }
-      // If disabled or no animation for this emotion, keep current animation (idle)
-
-      startLipSync(analyser);
-    },
-    [startLipSync],
-  );
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const handleSpeechStart = useCallback((_analyser: AnalyserNode, _emotion: Emotion) => {}, []);
 
   const handleSpeechEnd = useCallback(() => {
-    isSpeakingRef.current = false;
-    // Reset random idle timer to prevent immediate trigger after speaking
-    lastIdleAnimTimeRef.current = Date.now();
-    nextIdleIntervalRef.current =
-      IDLE_RANDOM_MIN_INTERVAL + Math.random() * (IDLE_RANDOM_MAX_INTERVAL - IDLE_RANDOM_MIN_INTERVAL);
-    stopLipSync();
-    // Reset emotion to neutral after speaking
-    setCurrentEmotion("neutral");
-    avatarRef.current?.setEmotion("neutral");
-  }, [stopLipSync]);
-
-  const handleAnimationEnd = useCallback(() => {
-    // When animation ends, return to idle and reset random idle timer
-    setCurrentAnimationUrl(animationManifestRef.current?.idle_loop ?? FALLBACK_IDLE_LOOP_URL);
-    lastIdleAnimTimeRef.current = Date.now();
-    nextIdleIntervalRef.current =
-      IDLE_RANDOM_MIN_INTERVAL + Math.random() * (IDLE_RANDOM_MAX_INTERVAL - IDLE_RANDOM_MIN_INTERVAL);
-  }, []);
-
-  const handleAnimationLoop = useCallback(() => {
-    if (isSpeakingRef.current) return;
-    if (!enableIdleAnimationsRef.current) return;
-    const elapsed = Date.now() - lastIdleAnimTimeRef.current;
-    if (elapsed < nextIdleIntervalRef.current) return;
-    const idleUrls = animationManifestRef.current?.idle;
-    if (!idleUrls || idleUrls.length === 0) return;
-    const randomIndex = Math.floor(Math.random() * idleUrls.length);
-    setCurrentAnimationUrl(idleUrls[randomIndex]);
+    dismissRef.current?.();
   }, []);
 
   const { speakText } = useSpeech({
@@ -310,84 +130,98 @@ function App() {
     isMicMuted: micActive && muteOnMicActive,
   });
 
-  // Debug: Log when speakerId changes
+  const webhookEnabled = webhookService !== "none";
+  const showPopup = !webhookEnabled && notificationMode !== "audio";
+  const playSpeech = !webhookEnabled && notificationMode !== "visual";
+
+  const handleWebhookNotify = useCallback((phrase: string, emotion: Emotion) => {
+    window.electron?.sendWebhookNotification?.(phrase, emotion);
+  }, []);
+
+  const { popupState, enqueue, dismiss } = useNotificationPopup({
+    onTrigger: (phrase, emotion) => speakText(phrase, emotion),
+    onWebhookNotify: handleWebhookNotify,
+    webhookEnabled,
+    showPopup,
+    playSpeech,
+    customPhrases,
+  });
+
+  useEffect(() => { dismissRef.current = dismiss; }, [dismiss]);
+
+  // Track whether popup is active for hit detection
   useEffect(() => {
-    console.log(`[App] Speaker ID changed to: ${speakerId}`);
-  }, [speakerId]);
+    popupStateActiveRef.current = popupState !== "hidden";
+  }, [popupState]);
 
-  // Apply emotion when avatar ref changes
+  // Listen for speak messages from Electron
   useEffect(() => {
-    if (avatarRef.current) {
-      avatarRef.current.setEmotion(currentEmotion);
-    }
-  }, [currentEmotion]);
+    if (!window.electron?.onSpeak) return;
+    const cleanup = window.electron.onSpeak((message: string) => {
+      try {
+        const data = JSON.parse(message) as { type: string; text: string; emotion?: Emotion };
+        if (data.type === "speak") enqueue((data.emotion as Emotion) || "neutral");
+      } catch (err) {
+        console.error("Failed to parse speak message:", err);
+      }
+    });
+    return cleanup;
+  }, [enqueue]);
 
-  // Listen for IPC messages from Electron main process
+  // Click-through: pass-through everywhere except popup area and settings panel
   useEffect(() => {
-    if (window.electron?.onSpeak) {
-      const cleanup = window.electron.onSpeak((message: string) => {
-        try {
-          const data = JSON.parse(message) as { type: string; text: string; emotion?: Emotion };
-          if (data.type === "speak" && data.text) {
-            const emotion = data.emotion || "neutral";
-            // Emotion will be set in handleSpeechStart (when speech actually starts)
-            speakText(data.text, emotion);
-          }
-        } catch (err) {
-          console.error("Failed to parse speak message:", err);
-        }
-      });
+    const electron = window.electron;
+    if (!electron?.setIgnoreMouseEvents) return;
 
-      // Cleanup: remove listener when speakText changes
-      return cleanup;
-    }
-  }, [speakText]);
+    let lastInsideState: boolean | null = null;
 
-  // Settings panel handlers
-  const handleVRMChange = useCallback(() => {
-    console.log("[App] VRM file changed, reloading...");
-    loadVRMFile()
+    const isInsidePopup = (clientX: number, clientY: number) => {
+      if (!showPopup) return false;
+      if (!popupStateActiveRef.current) return false;
+      const rect = computePopupRect(popupPositionRef.current, containerSizeRef.current, screenSizeRef.current);
+      return clientX >= rect.x && clientX <= rect.x + rect.w && clientY >= rect.y && clientY <= rect.y + rect.h;
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const isInside = isInsidePopup(e.clientX, e.clientY) || showSettingsRef.current;
+      if (isInside !== lastInsideState) {
+        lastInsideState = isInside;
+        electron.setIgnoreMouseEvents(devToolsOpen ? false : !isInside);
+      }
+    };
+
+    electron.setIgnoreMouseEvents(false);
+    window.addEventListener("mousemove", handleMouseMove);
+
+    const cleanupDevTools = electron.onDevToolsStateChanged?.((isOpen: boolean) => {
+      setDevToolsOpen(isOpen);
+      if (isOpen) electron.setIgnoreMouseEvents(false);
+      else if (lastInsideState !== null) electron.setIgnoreMouseEvents(!lastInsideState);
+    });
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      cleanupDevTools?.();
+    };
+  }, [devToolsOpen]);
+
+  // Settings handlers
+  const handleImageChange = useCallback(() => {
+    loadImageFile()
       .then((file) => {
-        if (file) {
-          const url = createBlobURL(file);
-          setVrmUrl(url);
-          console.log("[App] VRM reloaded:", file.name);
-        } else {
-          setVrmUrl(DEFAULT_VRM_URL);
-          console.log("[App] No custom VRM, using default");
-        }
+        if (file) setImageUrl(createImageBlobURL(file));
+        else setImageUrl(DEFAULT_IMAGE_URL);
       })
-      .catch((err) => {
-        console.error("Failed to reload VRM file:", err);
-      });
+      .catch((err) => console.error("[App] Failed to reload image:", err));
   }, []);
 
   const handleTestSpeech = useCallback(() => {
-    console.log("[App] Playing test speech");
     speakText("こんにちは。お役に立てることはありますか？", "happy");
   }, [speakText]);
 
   const handleContainerSizeChange = useCallback((newSize: number) => {
     containerSizeRef.current = newSize;
     setContainerSize(newSize);
-
-    // Debounce position persistence
-    const center = containerCenterRef.current;
-    const topLeftX = Math.round(center.x - newSize / 2);
-    const topLeftY = Math.round(center.y - newSize / 2);
-    window.electron?.setCharacterPosition?.(topLeftX, topLeftY);
-  }, []);
-
-  const handleEnableIdleAnimationsChange = useCallback(async (value: boolean) => {
-    setEnableIdleAnimations(value);
-    enableIdleAnimationsRef.current = value;
-    await window.electron?.setEnableIdleAnimations?.(value);
-  }, []);
-
-  const handleEnableSpeechAnimationsChange = useCallback(async (value: boolean) => {
-    setEnableSpeechAnimations(value);
-    enableSpeechAnimationsRef.current = value;
-    await window.electron?.setEnableSpeechAnimations?.(value);
   }, []);
 
   const handleMuteOnMicActiveChange = useCallback(async (value: boolean) => {
@@ -395,295 +229,61 @@ function App() {
     await window.electron?.setMuteOnMicActive?.(value);
   }, []);
 
-  const handleResetCharacterPosition = useCallback(async () => {
-    await window.electron?.resetCharacterPosition?.();
-    const screenSize = await window.electron?.getScreenSize?.();
-    if (screenSize) {
-      const size = containerSizeRef.current;
-      const center = {
-        x: Math.round(screenSize.width / 2),
-        y: Math.round(screenSize.height - size / 2),
-      };
-      setContainerCenter(center);
-      containerCenterRef.current = center;
-    }
+  const handlePopupPositionChange = useCallback(async (value: PopupPosition) => {
+    setPopupPosition(value);
+    popupPositionRef.current = value;
+    await window.electron?.setPopupPosition?.(value);
+  }, []);
+
+  const handlePopupAnimationChange = useCallback(async (value: PopupAnimation) => {
+    setPopupAnimation(value);
+    await window.electron?.setPopupAnimation?.(value);
+  }, []);
+
+  const handlePopupDirectionChange = useCallback(async (value: PopupDirection) => {
+    setPopupDirection(value);
+    await window.electron?.setPopupDirection?.(value);
+  }, []);
+
+  const handleNotificationModeChange = useCallback(async (value: NotificationMode) => {
+    setNotificationMode(value);
+    await window.electron?.setNotificationMode?.(value);
+  }, []);
+
+  const handleWebhookServiceChange = useCallback(async (value: string) => {
+    setWebhookService(value);
+    await window.electron?.setWebhookService?.(value);
   }, []);
 
   const handleResetAllSettings = useCallback(async () => {
-    try {
-      await deleteVRMFile();
-      console.log("[App] VRM file deleted");
-    } catch (err) {
-      console.error("[App] Failed to delete VRM file:", err);
-    }
-
+    try { await deleteImageFile(); } catch { /* ignore */ }
     await window.electron?.resetAllSettings?.();
-
-    // Reset local state
-    handleVRMChange();
+    setImageUrl(DEFAULT_IMAGE_URL);
     setSpeakerId(888753760);
     setVolumeScale(1.0);
-    setContainerSize(800);
-    containerSizeRef.current = 800;
+    setContainerSize(200);
+    containerSizeRef.current = 200;
     setMuteOnMicActive(false);
-    setEnableIdleAnimations(true);
-    enableIdleAnimationsRef.current = true;
-    setEnableSpeechAnimations(true);
-    enableSpeechAnimationsRef.current = true;
-
-    // Reset character position
-    const screenSize = await window.electron?.getScreenSize?.();
-    if (screenSize) {
-      const center = {
-        x: Math.round(screenSize.width / 2),
-        y: Math.round(screenSize.height - 400),
-      };
-      setContainerCenter(center);
-      containerCenterRef.current = center;
-    }
-  }, [handleVRMChange]);
-
-  // Custom container drag and click-through implementation
-  useEffect(() => {
-    const electron = window.electron;
-    if (!electron?.setIgnoreMouseEvents) {
-      return;
-    }
-
-    let isDragging = false;
-    let dragStartX = 0;
-    let dragStartY = 0;
-    let containerStartCenterX = 0;
-    let containerStartCenterY = 0;
-    let lastInsideState: boolean | null = null;
-
-    const isInsideCharacterArea = (clientX: number, clientY: number) => {
-      if (!isCharacterVisibleRef.current) return false;
-      const center = containerCenterRef.current;
-      const size = containerSizeRef.current;
-      const radiusX = size * ELLIPSE_RADIUS_X;
-      const radiusY = size * ELLIPSE_RADIUS_Y;
-      const ellipseCenterY = center.y + size * ELLIPSE_CENTER_Y_OFFSET;
-      return isInsideEllipse(clientX, clientY, center.x, ellipseCenterY, radiusX, radiusY);
-    };
-
-    const isInsideSettingsPanelArea = (clientX: number, clientY: number) => {
-      if (!showSettingsRef.current) return false;
-      // Settings panel is fixed to the right side, full height, SETTINGS_PANEL_WIDTH wide
-      return clientX >= window.innerWidth - SETTINGS_PANEL_WIDTH && clientY >= 0;
-    };
-
-    const isInsideInteractiveArea = (clientX: number, clientY: number) => {
-      return isInsideCharacterArea(clientX, clientY) || isInsideSettingsPanelArea(clientX, clientY);
-    };
-
-    const handleMouseDown = (e: MouseEvent) => {
-      if (e.button !== 0) return;
-      if (isInsideSettingsPanelArea(e.clientX, e.clientY)) return; // Don't drag from settings panel
-      if (!isInsideCharacterArea(e.clientX, e.clientY)) return;
-
-      isDragging = true;
-      dragStartX = e.clientX;
-      dragStartY = e.clientY;
-      containerStartCenterX = containerCenterRef.current.x;
-      containerStartCenterY = containerCenterRef.current.y;
-    };
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const isInside = isInsideInteractiveArea(e.clientX, e.clientY);
-
-      if (isInside !== lastInsideState) {
-        lastInsideState = isInside;
-        electron.setIgnoreMouseEvents(devToolsOpen ? false : !isInside);
-      }
-
-      if (isDragging) {
-        const deltaX = e.clientX - dragStartX;
-        const deltaY = e.clientY - dragStartY;
-        const newCenterX = containerStartCenterX + deltaX;
-        const newCenterY = containerStartCenterY + deltaY;
-        containerCenterRef.current = { x: newCenterX, y: newCenterY };
-        setContainerCenter({ x: newCenterX, y: newCenterY });
-      }
-    };
-
-    const handleMouseUp = () => {
-      if (isDragging) {
-        isDragging = false;
-        // Persist position (convert center to top-left)
-        const center = containerCenterRef.current;
-        const size = containerSizeRef.current;
-        const topLeftX = Math.round(center.x - size / 2);
-        const topLeftY = Math.round(center.y - size / 2);
-        electron.setCharacterPosition?.(topLeftX, topLeftY);
-      }
-    };
-
-    electron.setIgnoreMouseEvents(false);
-
-    const cleanupFunctions: (() => void)[] = [];
-
-    window.addEventListener("mousedown", handleMouseDown);
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    cleanupFunctions.push(() => {
-      window.removeEventListener("mousedown", handleMouseDown);
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    });
-
-    if (electron.onDevToolsStateChanged) {
-      const cleanupDevTools = electron.onDevToolsStateChanged((isOpen: boolean) => {
-        console.log(`[App] DevTools state changed: ${isOpen ? "opened" : "closed"}`);
-        setDevToolsOpen(isOpen);
-        if (isOpen) {
-          electron.setIgnoreMouseEvents(false);
-        } else if (lastInsideState !== null) {
-          electron.setIgnoreMouseEvents(!lastInsideState);
-        }
-      });
-      cleanupFunctions.push(cleanupDevTools);
-    }
-
-    return () => {
-      cleanupFunctions.forEach((fn) => fn());
-    };
-  }, [devToolsOpen]);
-
-  // Debounced render size: actual canvas/div dimensions.
-  // During rapid slider movement, only CSS scale() changes (GPU-only, no layout reflow).
-  // When slider stops, renderSize catches up and canvas resizes to correct resolution.
-  const [renderSize, setRenderSize] = useState(containerSize);
-  useEffect(() => {
-    if (renderSize === containerSize) return;
-    const timer = setTimeout(() => setRenderSize(containerSize), 150);
-    return () => clearTimeout(timer);
-  }, [containerSize, renderSize]);
-
-  // Calculate ellipse parameters for visualization (in renderSize coordinate space)
-  const ellipseParams = {
-    centerX: renderSize / 2,
-    centerY: renderSize / 2 + renderSize * ELLIPSE_CENTER_Y_OFFSET,
-    radiusX: renderSize * ELLIPSE_RADIUS_X,
-    radiusY: renderSize * ELLIPSE_RADIUS_Y,
-  };
+    setPopupPosition("bottom-right");
+    setPopupAnimation("slide");
+    setPopupDirection("primary");
+    setNotificationMode("both");
+    setWebhookService("none");
+  }, []);
 
   return (
     <div className="w-screen h-screen overflow-hidden relative">
-      {isInitialized && (
-        <div
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            width: `${renderSize}px`,
-            height: `${renderSize}px`,
-            transform: `translate(${containerCenter.x - containerSize / 2}px, ${containerCenter.y - containerSize / 2}px) scale(${containerSize / renderSize})`,
-            transformOrigin: "0 0",
-            willChange: "transform",
-            display: isCharacterVisible ? undefined : "none",
-          }}
-        >
-          <Canvas
-            camera={{ position: [0, 0.2, 3.2], fov: 30 }}
-            gl={{ toneMapping: AgXToneMapping }}
-            style={{ width: "100%", height: "100%" }}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setShowSettings((prev) => !prev);
-            }}
-          >
-            <Scene>
-              <VRMAvatar
-                ref={avatarRef}
-                url={vrmUrl}
-                animationUrl={currentAnimationUrl}
-                animationLoop={currentAnimationUrl === FALLBACK_IDLE_LOOP_URL}
-                onAnimationEnd={handleAnimationEnd}
-                onAnimationLoop={handleAnimationLoop}
-                cursorTrackingOptions={cursorTrackingOptions}
-                containerSize={renderSize}
-                onHeadPositionUpdate={(containerX, containerY) => {
-                  // containerX and containerY are in container coordinates (0 to renderSize)
-                  setHeadPosition({ x: containerX, y: containerY });
-                }}
-              />
-            </Scene>
-          </Canvas>
-
-          {/* Visualize draggable area when DevTools is open */}
-          {devToolsOpen && (
-            <svg
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                height: "100%",
-                pointerEvents: "none",
-              }}
-              viewBox={`0 0 ${renderSize} ${renderSize}`}
-            >
-              <ellipse
-                cx={ellipseParams.centerX}
-                cy={ellipseParams.centerY}
-                rx={ellipseParams.radiusX}
-                ry={ellipseParams.radiusY}
-                fill="none"
-                stroke="rgba(255, 0, 0, 0.7)"
-                strokeWidth="3"
-                strokeDasharray="10, 5"
-              />
-              {/* Visualize cursor tracking origin (head position) */}
-              {headPosition && (
-                <>
-                  {/* Horizontal line through head position */}
-                  <line
-                    x1="0"
-                    y1={headPosition.y}
-                    x2={renderSize}
-                    y2={headPosition.y}
-                    stroke="rgba(0, 255, 0, 0.5)"
-                    strokeWidth="2"
-                    strokeDasharray="5, 5"
-                  />
-                  {/* Vertical line through head position */}
-                  <line
-                    x1={headPosition.x}
-                    y1="0"
-                    x2={headPosition.x}
-                    y2={renderSize}
-                    stroke="rgba(0, 255, 0, 0.5)"
-                    strokeWidth="2"
-                    strokeDasharray="5, 5"
-                  />
-                  {/* Head position point */}
-                  <circle
-                    cx={headPosition.x}
-                    cy={headPosition.y}
-                    r="8"
-                    fill="rgba(0, 255, 0, 0.8)"
-                    stroke="rgba(0, 255, 0, 1)"
-                    strokeWidth="2"
-                  />
-                  {/* Label for head position */}
-                  <text
-                    x={headPosition.x + 15}
-                    y={headPosition.y - 10}
-                    fill="rgba(0, 255, 0, 0.9)"
-                    fontSize="14"
-                    fontWeight="bold"
-                  >
-                    視線の原点
-                  </text>
-                </>
-              )}
-            </svg>
-          )}
-        </div>
+      {isInitialized && showPopup && (
+        <CharacterPopup
+          imageUrl={imageUrl}
+          popupState={popupState}
+          position={popupPosition}
+          animation={popupAnimation}
+          direction={popupDirection}
+          size={containerSize}
+        />
       )}
 
-      {/* Settings Panel Overlay */}
       {showSettings && (
         <SettingsPanel
           speakerId={speakerId}
@@ -692,15 +292,20 @@ function App() {
           onVolumeScaleChange={setVolumeScale}
           containerSize={containerSize}
           onContainerSizeChange={handleContainerSizeChange}
-          onVRMChange={handleVRMChange}
+          onImageChange={handleImageChange}
           onTestSpeech={handleTestSpeech}
-          enableIdleAnimations={enableIdleAnimations}
-          onEnableIdleAnimationsChange={handleEnableIdleAnimationsChange}
-          enableSpeechAnimations={enableSpeechAnimations}
-          onEnableSpeechAnimationsChange={handleEnableSpeechAnimationsChange}
           muteOnMicActive={muteOnMicActive}
           onMuteOnMicActiveChange={handleMuteOnMicActiveChange}
-          onResetCharacterPosition={handleResetCharacterPosition}
+          popupPosition={popupPosition}
+          onPopupPositionChange={handlePopupPositionChange}
+          popupAnimation={popupAnimation}
+          onPopupAnimationChange={handlePopupAnimationChange}
+          popupDirection={popupDirection}
+          onPopupDirectionChange={handlePopupDirectionChange}
+          notificationMode={notificationMode}
+          onNotificationModeChange={handleNotificationModeChange}
+          webhookService={webhookService}
+          onWebhookServiceChange={handleWebhookServiceChange}
           onResetAllSettings={handleResetAllSettings}
           onClose={() => setShowSettings(false)}
         />

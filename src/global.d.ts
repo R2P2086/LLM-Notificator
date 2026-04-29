@@ -2,12 +2,6 @@ export {};
 
 export type EngineType = "aivis" | "voicevox" | "custom";
 
-export type AnimationManifest = {
-  idle_loop: string;
-  idle: string[];
-  emotions: Partial<Record<string, string[]>>;
-};
-
 declare global {
   interface Window {
     electron?: {
@@ -21,9 +15,6 @@ declare global {
       getCharacterSize: () => Promise<number>;
       setCharacterSize: (size: number) => Promise<number>;
       resetCharacterSize: () => Promise<number>;
-      getCharacterPosition: () => Promise<{ x: number; y: number } | undefined>;
-      setCharacterPosition: (x: number, y: number) => void;
-      resetCharacterPosition: () => Promise<boolean>;
       getScreenSize: () => Promise<{ width: number; height: number }>;
       resetAllSettings: () => Promise<boolean>;
       getMicActive: () => Promise<boolean>;
@@ -37,21 +28,38 @@ declare global {
       setSpeakerId: (id: number) => Promise<boolean>;
       getVolumeScale: () => Promise<number>;
       setVolumeScale: (volume: number) => Promise<boolean>;
-      getEnableIdleAnimations: () => Promise<boolean>;
-      setEnableIdleAnimations: (value: boolean) => Promise<boolean>;
-      getEnableSpeechAnimations: () => Promise<boolean>;
-      setEnableSpeechAnimations: (value: boolean) => Promise<boolean>;
       onMicActiveChanged: (callback: (active: boolean) => void) => () => void;
       onDevToolsStateChanged: (callback: (isOpen: boolean) => void) => () => void;
       openDevTools: () => Promise<void>;
       onToggleSettingsPanel: (callback: () => void) => () => void;
-      onToggleCharacterVisibility: (callback: (visible: boolean) => void) => () => void;
+      onNotificationModeChanged: (callback: (mode: string) => void) => () => void;
       getAutoUpdateCheck: () => Promise<boolean>;
       setAutoUpdateCheck: (value: boolean) => Promise<boolean>;
-      getAnimationManifest: () => Promise<AnimationManifest>;
       getActiveSession: () => Promise<string | null>;
       clearActiveSession: () => Promise<boolean>;
       onActiveSessionChanged: (callback: (sessionId: string | null) => void) => () => void;
+      getWatchPath: () => Promise<string>;
+      setWatchPath: (watchPath: string) => Promise<boolean>;
+      getCodexActiveFile: () => Promise<string | null>;
+      clearCodexActiveFile: () => Promise<boolean>;
+      onCodexActiveFileChanged: (callback: (filePath: string | null) => void) => () => void;
+      getCodexWatchPath: () => Promise<string>;
+      setCodexWatchPath: (watchPath: string) => Promise<boolean>;
+      getNotificationPhrases: () => Promise<Record<string, string[]> | null>;
+      setNotificationPhrases: (phrases: Record<string, string[]>) => Promise<boolean>;
+      getPopupPosition: () => Promise<string>;
+      setPopupPosition: (value: string) => Promise<boolean>;
+      getPopupAnimation: () => Promise<string>;
+      setPopupAnimation: (value: string) => Promise<boolean>;
+      getPopupDirection: () => Promise<string>;
+      setPopupDirection: (value: string) => Promise<boolean>;
+      getNotificationMode: () => Promise<string>;
+      setNotificationMode: (value: string) => Promise<boolean>;
+      getWebhookService: () => Promise<string>;
+      setWebhookService: (value: string) => Promise<boolean>;
+      getWebhookUrl: () => Promise<string>;
+      setWebhookUrl: (url: string) => Promise<boolean>;
+      sendWebhookNotification: (phrase: string, emotion: string) => Promise<void>;
     };
   }
 }
