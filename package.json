@@ -1,14 +1,15 @@
 {
-  "name": "cc-mascot",
+  "name": "llm-notificator",
   "private": true,
   "version": "1.0.0",
-  "description": "Claude Codeからの返答をVRMキャラクターが喋ってくれるデスクトップマスコット",
-  "author": "kazakago",
+  "description": "LLMタスク完了・確認待ちをポップアップ通知するデスクトップマスコット",
+  "author": "R2P2086",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite --mode electron",
     "build": "npm run generate-licenses && tsc -b && vite build --mode electron",
+    "build:icons": "node scripts/build-icons.mjs",
     "build:mic-monitor": "node scripts/build-mic-monitor.mjs",
     "package": "npm run build:mic-monitor && npm run build && electron-builder --publish never",
     "generate-licenses": "license-checker-rseidelsohn --json --production --customPath license-format.json > public/licenses.json",
@@ -21,17 +22,11 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@pixiv/three-vrm": "^3.4.4",
-    "@pixiv/three-vrm-animation": "^3.4.4",
-    "@react-three/drei": "^10.7.7",
-    "@react-three/fiber": "^9.5.0",
-    "@react-three/postprocessing": "^3.0.4",
     "chokidar": "^5.0.0",
     "electron-store": "^11.0.2",
     "electron-updater": "^6.7.3",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "three": "^0.182.0"
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
@@ -42,12 +37,12 @@
     "@types/node": "^25.0.10",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
-    "@types/three": "^0.182.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.1.1",
     "@vitest/coverage-v8": "^4.0.17",
     "@vitest/ui": "^4.0.17",
     "autoprefixer": "^10.4.23",
+    "better-sqlite3": "^12.9.0",
     "electron": "^40.0.0",
     "electron-builder": "^26.4.0",
     "electron-mcp-server": "^1.5.0",
@@ -60,8 +55,10 @@
     "globals": "^17.1.0",
     "jsdom": "^27.4.0",
     "license-checker-rseidelsohn": "^4.4.2",
+    "png2icons": "^2.0.1",
     "postcss": "^8.5.6",
     "prettier": "^3.8.1",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4.1.18",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
@@ -71,13 +68,13 @@
     "vitest": "^4.0.17"
   },
   "build": {
-    "appId": "com.kazakago.cc-mascot",
-    "productName": "CC Mascot",
+    "appId": "com.r2unit.llm-notificator",
+    "productName": "LLM Notificator",
     "icon": "resources/icons/icon.png",
     "publish": {
       "provider": "github",
-      "owner": "kazakago",
-      "repo": "cc-mascot"
+      "owner": "R2P2086",
+      "repo": "LLM-Notificator"
     },
     "afterSign": "scripts/notarize.js",
     "directories": {
@@ -95,7 +92,7 @@
     ],
     "mac": {
       "icon": "resources/icons/icon.icns",
-      "artifactName": "CC-Mascot-${version}-mac-${arch}.${ext}",
+      "artifactName": "LLM-Notificator-${version}-mac-${arch}.${ext}",
       "target": [
         "dmg",
         "zip"
@@ -117,7 +114,7 @@
     },
     "win": {
       "icon": "resources/icons/icon.ico",
-      "artifactName": "CC-Mascot-${version}-windows-${arch}.${ext}",
+      "artifactName": "LLM-Notificator-${version}-windows-${arch}.${ext}",
       "target": [
         "nsis",
         "zip"
@@ -134,7 +131,7 @@
     },
     "linux": {
       "icon": "resources/icons/icon.png",
-      "artifactName": "CC-Mascot-${version}-linux-${arch}.${ext}",
+      "artifactName": "LLM-Notificator-${version}-linux-${arch}.${ext}",
       "target": "AppImage",
       "category": "Entertainment"
     }
