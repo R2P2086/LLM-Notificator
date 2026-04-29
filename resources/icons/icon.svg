@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="c">
+      <rect width="1024" height="1024" rx="230"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#c)">
+    <!-- Background -->
+    <rect width="1024" height="1024" fill="#27272a"/>
+    <!-- Speech bubble body -->
+    <rect x="172" y="240" width="680" height="460" rx="90" fill="white"/>
+    <!-- Speech bubble tail (bottom-left) -->
+    <path d="M302,700 L220,878 L482,700 Z" fill="white"/>
+    <!-- Ellipsis dots -->
+    <circle cx="372" cy="470" r="42" fill="#d4d4d8"/>
+    <circle cx="512" cy="470" r="42" fill="#d4d4d8"/>
+    <circle cx="652" cy="470" r="42" fill="#d4d4d8"/>
+    <!-- Notification badge (orange) -->
+    <circle cx="800" cy="222" r="112" fill="#f97316"/>
+  </g>
+</svg>
