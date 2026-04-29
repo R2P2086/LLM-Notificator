@@ -1,3 +1,5 @@
+// Modified from the original cc-mascot project by kazakago.
+// Original: https://github.com/kazakago/cc-mascot (Apache License 2.0)
 import { contextBridge, ipcRenderer } from "electron";
 
 // Expose protected methods that allow the renderer process to use
@@ -43,15 +45,6 @@ contextBridge.exposeInMainWorld("electron", {
   resetCharacterSize: (): Promise<number> => {
     return ipcRenderer.invoke("reset-character-size");
   },
-  getCharacterPosition: (): Promise<{ x: number; y: number } | undefined> => {
-    return ipcRenderer.invoke("get-character-position");
-  },
-  setCharacterPosition: (x: number, y: number): void => {
-    ipcRenderer.send("set-character-position", x, y);
-  },
-  resetCharacterPosition: (): Promise<boolean> => {
-    return ipcRenderer.invoke("reset-character-position");
-  },
   getScreenSize: (): Promise<{ width: number; height: number }> => {
     return ipcRenderer.invoke("get-screen-size");
   },
@@ -91,18 +84,6 @@ contextBridge.exposeInMainWorld("electron", {
   setVolumeScale: (volume: number): Promise<boolean> => {
     return ipcRenderer.invoke("set-volume-scale", volume);
   },
-  getEnableIdleAnimations: (): Promise<boolean> => {
-    return ipcRenderer.invoke("get-enable-idle-animations");
-  },
-  setEnableIdleAnimations: (value: boolean): Promise<boolean> => {
-    return ipcRenderer.invoke("set-enable-idle-animations", value);
-  },
-  getEnableSpeechAnimations: (): Promise<boolean> => {
-    return ipcRenderer.invoke("get-enable-speech-animations");
-  },
-  setEnableSpeechAnimations: (value: boolean): Promise<boolean> => {
-    return ipcRenderer.invoke("set-enable-speech-animations", value);
-  },
   onMicActiveChanged: (callback: (active: boolean) => void) => {
     const listener = (_event: unknown, active: boolean) => {
       callback(active);
@@ -124,13 +105,13 @@ contextBridge.exposeInMainWorld("electron", {
   openDevTools: (): Promise<void> => {
     return ipcRenderer.invoke("open-devtools");
   },
-  onToggleCharacterVisibility: (callback: (visible: boolean) => void) => {
-    const listener = (_event: unknown, visible: boolean) => {
-      callback(visible);
+  onNotificationModeChanged: (callback: (mode: string) => void) => {
+    const listener = (_event: unknown, mode: string) => {
+      callback(mode);
     };
-    ipcRenderer.on("toggle-character-visibility", listener);
+    ipcRenderer.on("notification-mode-changed", listener);
     return () => {
-      ipcRenderer.removeListener("toggle-character-visibility", listener);
+      ipcRenderer.removeListener("notification-mode-changed", listener);
     };
   },
   onToggleSettingsPanel: (callback: () => void) => {
@@ -148,13 +129,6 @@ contextBridge.exposeInMainWorld("electron", {
   setAutoUpdateCheck: (value: boolean): Promise<boolean> => {
     return ipcRenderer.invoke("set-auto-update-check", value);
   },
-  getAnimationManifest: (): Promise<{
-    idle_loop: string;
-    idle: string[];
-    emotions: Partial<Record<string, string[]>>;
-  }> => {
-    return ipcRenderer.invoke("get-animation-manifest");
-  },
   getActiveSession: (): Promise<string | null> => {
     return ipcRenderer.invoke("get-active-session");
   },
@@ -169,5 +143,77 @@ contextBridge.exposeInMainWorld("electron", {
     return () => {
       ipcRenderer.removeListener("active-session-changed", listener);
     };
+  },
+  getWatchPath: (): Promise<string> => {
+    return ipcRenderer.invoke("get-watch-path");
+  },
+  setWatchPath: (watchPath: string): Promise<boolean> => {
+    return ipcRenderer.invoke("set-watch-path", watchPath);
+  },
+  getCodexActiveFile: (): Promise<string | null> => {
+    return ipcRenderer.invoke("get-codex-active-file");
+  },
+  clearCodexActiveFile: (): Promise<boolean> => {
+    return ipcRenderer.invoke("clear-codex-active-file");
+  },
+  onCodexActiveFileChanged: (callback: (filePath: string | null) => void) => {
+    const listener = (_event: unknown, filePath: string | null) => {
+      callback(filePath);
+    };
+    ipcRenderer.on("codex-active-file-changed", listener);
+    return () => {
+      ipcRenderer.removeListener("codex-active-file-changed", listener);
+    };
+  },
+  getCodexWatchPath: (): Promise<string> => {
+    return ipcRenderer.invoke("get-codex-watch-path");
+  },
+  setCodexWatchPath: (watchPath: string): Promise<boolean> => {
+    return ipcRenderer.invoke("set-codex-watch-path", watchPath);
+  },
+  getNotificationPhrases: (): Promise<Record<string, string[]> | null> => {
+    return ipcRenderer.invoke("get-notification-phrases");
+  },
+  setNotificationPhrases: (phrases: Record<string, string[]>): Promise<boolean> => {
+    return ipcRenderer.invoke("set-notification-phrases", phrases);
+  },
+  getPopupPosition: (): Promise<string> => {
+    return ipcRenderer.invoke("get-popup-position");
+  },
+  setPopupPosition: (value: string): Promise<boolean> => {
+    return ipcRenderer.invoke("set-popup-position", value);
+  },
+  getPopupAnimation: (): Promise<string> => {
+    return ipcRenderer.invoke("get-popup-animation");
+  },
+  setPopupAnimation: (value: string): Promise<boolean> => {
+    return ipcRenderer.invoke("set-popup-animation", value);
+  },
+  getPopupDirection: (): Promise<string> => {
+    return ipcRenderer.invoke("get-popup-direction");
+  },
+  setPopupDirection: (value: string): Promise<boolean> => {
+    return ipcRenderer.invoke("set-popup-direction", value);
+  },
+  getNotificationMode: (): Promise<string> => {
+    return ipcRenderer.invoke("get-notification-mode");
+  },
+  setNotificationMode: (value: string): Promise<boolean> => {
+    return ipcRenderer.invoke("set-notification-mode", value);
+  },
+  getWebhookService: (): Promise<string> => {
+    return ipcRenderer.invoke("get-webhook-service");
+  },
+  setWebhookService: (value: string): Promise<boolean> => {
+    return ipcRenderer.invoke("set-webhook-service", value);
+  },
+  getWebhookUrl: (): Promise<string> => {
+    return ipcRenderer.invoke("get-webhook-url");
+  },
+  setWebhookUrl: (url: string): Promise<boolean> => {
+    return ipcRenderer.invoke("set-webhook-url", url);
+  },
+  sendWebhookNotification: (phrase: string, emotion: string): Promise<void> => {
+    return ipcRenderer.invoke("send-webhook-notification", phrase, emotion);
   },
 });
