@@ -5,7 +5,7 @@
 SESSION_ID=$(cat /dev/stdin | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
 
 if [ -n "$SESSION_ID" ] && [ -n "$CLAUDE_ENV_FILE" ]; then
-  echo "export CC_MASCOT_SESSION_ID=${SESSION_ID}" >> "$CLAUDE_ENV_FILE"
+  echo "export LLM_NOTIFICATOR_SESSION_ID=${SESSION_ID}" >> "$CLAUDE_ENV_FILE"
 fi
 
 exit 0

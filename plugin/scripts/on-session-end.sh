@@ -1,13 +1,15 @@
 #!/bin/bash
+# Modified from the original cc-mascot project by kazakago.
+# Original: https://github.com/kazakago/cc-mascot (Apache License 2.0)
 # SessionEnd hook: Clear active-session file if it matches the ending session (best-effort).
 # stdin receives JSON: {"session_id": "...", "reason": "...", ...}
 
 case "$(uname)" in
   Darwin)
-    ACTIVE_SESSION_FILE="$HOME/Library/Application Support/cc-mascot/active-session"
+    ACTIVE_SESSION_FILE="$HOME/Library/Application Support/LLM Notificator/active-session"
     ;;
   *)
-    ACTIVE_SESSION_FILE="$APPDATA/cc-mascot/active-session"
+    ACTIVE_SESSION_FILE="$APPDATA/LLM Notificator/active-session"
     ;;
 esac
 
