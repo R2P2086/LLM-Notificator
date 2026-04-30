@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/notification-default.svg" alt="LLM Notificator" width="64" height="64">
+  <img src="public/notification-default.png" alt="LLM Notificator" width="64" height="64">
 </p>
 <h1 align="center">LLM Notificator</h1>
 <p align="center">Claude Code / Codex の作業完了・確認要求をデスクトップポップアップ＋ボイスで通知する常駐マスコット。</p>
@@ -186,6 +186,10 @@ npm run dev
 - フォーク元: [cc-mascot](https://github.com/kazakago/cc-mascot) by kazakago（Apache License 2.0）
 - [AivisSpeech](https://aivis-project.com/)
 - [VOICEVOX](https://voicevox.hiroshiba.jp/)
+
+## 素材
+
+- デフォルト通知画像: 画像生成AIで作成
 
 ## ライセンス
 

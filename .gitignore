@@ -31,7 +31,10 @@ resources/mic-monitor
 resources/mic-monitor.exe
 mic-monitor.obj
 
-# Claude
-.claude/plans
-.claude/rules
+# Claude Code / local tools
+.claude/
+plugin/
+
+# Source assets
+pics/
 

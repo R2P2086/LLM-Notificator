@@ -10,7 +10,7 @@ import type { Emotion } from "./types/emotion";
 import type { CustomPhrases } from "./constants/notificationPhrases";
 import type { PopupPosition, PopupAnimation, PopupDirection, NotificationMode } from "./types/popup";
 
-const DEFAULT_IMAGE_URL = "./notification-default.svg";
+const DEFAULT_IMAGE_URL = "./notification-default.png";
 const VOICEVOX_BASE_URL = "http://localhost:8564";
 
 function App() {
