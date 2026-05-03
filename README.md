@@ -30,7 +30,46 @@
 | ファイル編集ツール（承認待ち） | 確認 | 確認してね |
 | MCP ツール（承認待ち） | 確認 | 確認してね |
 
-> 自動承認の判定は `~/.claude/settings.json` の `permissions.allow` / `permissions.ask` をリアルタイム監視して行います。
+> **通知とパーミッション設定の関係**
+>
+> - 自動承認の判定は `~/.claude/settings.json` および `.claude/settings.json` / `settings.local.json` の `permissions.allow` / `permissions.ask` をリアルタイム監視して行います。
+> - Claude Code の承認ダイアログで **「このセッション中は許可」** を選んだ場合は `settings.json` に書き込まれないため、次回のツール実行でも LLM Notificator は通知します。
+> - **「常に許可」** を選んだ場合は `.claude/settings.local.json` に追記され、LLM Notificator は以降の同ツール呼び出しを通知対象外として扱います。
+> - プロジェクト外のファイルへの Read / Edit は、`settings.local.json` へ「常に許可」が書き込まれるまで毎回通知します（プロジェクト内のファイルは通知しません）。
+
+> **`Bash` を `permissions.allow` に設定している場合の注意**
+>
+> `Bash` を `allow` に入れていると、Claude Code が内部ルールで承認ダイアログを出すコマンドでも LLM Notificator は「自動承認済み」と判定します。  
+> 通知させたいコマンドは `permissions.ask` に個別に追加してください。以下はよく使われる設定例です。
+>
+> ```json
+> {
+>   "permissions": {
+>     "allow": ["Bash"],
+>     "ask": [
+>       "Bash(pip install *)",
+>       "Bash(pip3 install *)",
+>       "Bash(uv add *)",
+>       "Bash(pipx install *)",
+>       "Bash(brew install *)",
+>       "Bash(npm install -g *)",
+>       "Bash(npm install --global *)",
+>       "Bash(yarn global add *)",
+>       "Bash(deno install -g *)",
+>       "Bash(deno install --global *)",
+>       "Bash(bun install -g *)",
+>       "Bash(bun install --global *)",
+>       "Bash(gem install *)",
+>       "Bash(cargo install *)",
+>       "Bash(git push -f *)",
+>       "Bash(git push --force *)",
+>       "Bash(rm -rf *)",
+>       "Bash(powershell *)",
+>       "Bash(powershell.exe *)"
+>     ]
+>   }
+> }
+> ```
 
 ### Codex
 
