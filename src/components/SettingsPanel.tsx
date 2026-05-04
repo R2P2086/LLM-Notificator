@@ -68,8 +68,6 @@ interface SettingsPanelProps {
   onContainerSizeChange: (size: number) => void;
   onImageChange: () => void;
   onTestSpeech: () => void;
-  muteOnMicActive: boolean;
-  onMuteOnMicActiveChange: (value: boolean) => void;
   popupPosition: PopupPosition;
   onPopupPositionChange: (value: PopupPosition) => void;
   popupAnimation: PopupAnimation;
@@ -93,8 +91,6 @@ export default function SettingsPanel({
   onContainerSizeChange,
   onImageChange,
   onTestSpeech,
-  muteOnMicActive,
-  onMuteOnMicActiveChange,
   popupPosition,
   onPopupPositionChange,
   popupAnimation,
@@ -119,7 +115,6 @@ export default function SettingsPanel({
   const [loadingSpeakers, setLoadingSpeakers] = useState(false);
   const [isPlayingTest, setIsPlayingTest] = useState(false);
   const [testAudioError, setTestAudioError] = useState("");
-  const [micMonitorAvailable, setMicMonitorAvailable] = useState(false);
   const [includeSubAgents, setIncludeSubAgents] = useState(false);
   const [autoUpdateCheck, setAutoUpdateCheck] = useState(true);
   const [activeSession, setActiveSession] = useState<string | null>(null);
@@ -182,7 +177,6 @@ export default function SettingsPanel({
           setDefaultEnginePath(path);
         }
       }
-      if (window.electron?.getMicMonitorAvailable) setMicMonitorAvailable(await window.electron.getMicMonitorAvailable());
       if (window.electron?.getIncludeSubAgents) setIncludeSubAgents(await window.electron.getIncludeSubAgents());
       if (window.electron?.getAutoUpdateCheck) setAutoUpdateCheck(await window.electron.getAutoUpdateCheck());
       if (window.electron?.getActiveSession) setActiveSession(await window.electron.getActiveSession());
@@ -666,12 +660,6 @@ export default function SettingsPanel({
 
               <section className={`${sectionCls} space-y-4`}>
                 <h2 className={sectionHeadingCls}>高度な設定</h2>
-                {micMonitorAvailable && (
-                  <label className="flex items-center gap-2 cursor-pointer text-sm text-stone-800 dark:text-zinc-100">
-                    <input type="checkbox" checked={muteOnMicActive} onChange={(e) => onMuteOnMicActiveChange(e.target.checked)} className="w-4 h-4 m-0 cursor-pointer accent-orange-500" />
-                    <span>マイク使用中はミュートにする</span>
-                  </label>
-                )}
                 <label className="flex items-center gap-2 cursor-pointer text-sm text-stone-800 dark:text-zinc-100">
                   <input type="checkbox" checked={includeSubAgents} onChange={(e) => { setIncludeSubAgents(e.target.checked); window.electron?.setIncludeSubAgents?.(e.target.checked); }} className="w-4 h-4 m-0 cursor-pointer accent-orange-500" />
                   <span>サブエージェントの発言も含める</span>

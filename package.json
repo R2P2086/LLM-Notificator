@@ -12,7 +12,7 @@
     "build:icons": "node scripts/build-icons.mjs",
     "build:mic-monitor": "node scripts/build-mic-monitor.mjs",
     "build:voiceroid-bridge": "node scripts/build-voiceroid-bridge.mjs",
-    "package": "npm run build:mic-monitor && npm run build:voiceroid-bridge && npm run build && electron-builder --publish never",
+    "package": "npm run build:voiceroid-bridge && npm run build && electron-builder --publish never",
     "generate-licenses": "license-checker-rseidelsohn --json --production --customPath license-format.json > public/licenses.json",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -102,16 +102,7 @@
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
-      "extraResources": [
-        {
-          "from": "resources/mic-monitor",
-          "to": "mic-monitor",
-          "filter": [
-            "**/*"
-          ]
-        }
-      ]
+      "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "win": {
       "icon": "resources/icons/icon.ico",
@@ -121,13 +112,6 @@
         "zip"
       ],
       "extraResources": [
-        {
-          "from": "resources/mic-monitor.exe",
-          "to": "mic-monitor.exe",
-          "filter": [
-            "**/*"
-          ]
-        },
         {
           "from": "resources/voiceroid-bridge.exe",
           "to": "voiceroid-bridge.exe",

@@ -20,8 +20,6 @@ function App() {
   const [containerSize, setContainerSize] = useState(200);
   const [isInitialized, setIsInitialized] = useState(false);
   const [devToolsOpen, setDevToolsOpen] = useState(false);
-  const [muteOnMicActive, setMuteOnMicActive] = useState(false);
-  const [micActive, setMicActive] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [customPhrases, setCustomPhrases] = useState<CustomPhrases | null>(null);
   const [popupPosition, setPopupPosition] = useState<PopupPosition>("bottom-right");
@@ -84,14 +82,6 @@ function App() {
     window.electron?.getNotificationPhrases?.().then(setCustomPhrases);
   }, []);
 
-  // Mic state
-  useEffect(() => {
-    window.electron?.getMuteOnMicActive?.().then(setMuteOnMicActive);
-    window.electron?.getMicActive?.().then(setMicActive);
-    const cleanup = window.electron?.onMicActiveChanged?.((active) => setMicActive(active));
-    return () => cleanup?.();
-  }, []);
-
   // Tray events
   useEffect(() => {
     const cleanup = window.electron?.onNotificationModeChanged?.((mode) => setNotificationMode(mode as NotificationMode));
@@ -120,7 +110,6 @@ function App() {
     speakerId,
     baseUrl: VOICEVOX_BASE_URL,
     volumeScale,
-    isMicMuted: micActive && muteOnMicActive,
   });
 
   const webhookEnabled = webhookService !== "none";
@@ -219,11 +208,6 @@ function App() {
     setContainerSize(newSize);
   }, []);
 
-  const handleMuteOnMicActiveChange = useCallback(async (value: boolean) => {
-    setMuteOnMicActive(value);
-    await window.electron?.setMuteOnMicActive?.(value);
-  }, []);
-
   const handlePopupPositionChange = useCallback(async (value: PopupPosition) => {
     setPopupPosition(value);
     popupPositionRef.current = value;
@@ -258,7 +242,6 @@ function App() {
     setVolumeScale(1.0);
     setContainerSize(200);
     containerSizeRef.current = 200;
-    setMuteOnMicActive(false);
     setPopupPosition("bottom-right");
     setPopupAnimation("slide");
     setPopupDirection("primary");
@@ -289,8 +272,6 @@ function App() {
           onContainerSizeChange={handleContainerSizeChange}
           onImageChange={handleImageChange}
           onTestSpeech={handleTestSpeech}
-          muteOnMicActive={muteOnMicActive}
-          onMuteOnMicActiveChange={handleMuteOnMicActiveChange}
           popupPosition={popupPosition}
           onPopupPositionChange={handlePopupPositionChange}
           popupAnimation={popupAnimation}
