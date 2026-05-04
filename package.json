@@ -1,7 +1,7 @@
 {
   "name": "llm-notificator",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "LLMタスク完了・確認待ちをポップアップ通知するデスクトップマスコット",
   "author": "R2P2086",
   "type": "module",
