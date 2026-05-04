@@ -80,6 +80,14 @@ export function parseClaudeCodeLog(
         return [{ type: "speak", text: "", emotion: allowed ? "surprised" : "relaxed" }];
       }
 
+      if (toolName === "Read" || toolName === "Edit") {
+        const filePath = typeof toolItem.input?.file_path === "string" ? toolItem.input.file_path : undefined;
+        if (isToolAllowed && !isToolAllowed(toolName, filePath)) {
+          return [{ type: "speak", text: "", emotion: "relaxed" }];
+        }
+        return [];
+      }
+
       // その他のツール: 承認が必要になりうるもののみ通知（mcp__ プレフィックスも対象）
       if (!APPROVAL_REQUIRED_TOOLS.has(toolName) && !toolName.startsWith("mcp__")) return [];
       if (isToolAllowed && !isToolAllowed(toolName)) {

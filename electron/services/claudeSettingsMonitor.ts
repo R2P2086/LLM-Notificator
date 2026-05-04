@@ -107,6 +107,26 @@ export function createClaudeSettingsMonitor(projectRoot?: string) {
     isToolAllowed: (toolName: string, command?: string): boolean => {
       // ask list takes precedence: if the command matches a denied pattern, not auto-approved
       if (isDeniedByAsk(deniedTools, toolName, command)) return false;
+
+      // For file-path tools (Read, Edit): use project-root-aware check.
+      // In-project files are allowed; out-of-project files are denied unless
+      // explicitly listed with a path pattern in the allow list.
+      if (projectRoot && command !== undefined && (toolName === "Read" || toolName === "Edit")) {
+        const normalizedPath = path.normalize(command).toLowerCase();
+        const normalizedRoot = path.normalize(projectRoot).toLowerCase();
+        if (normalizedPath.startsWith(normalizedRoot + path.sep) || normalizedPath === normalizedRoot) {
+          return true; // in-project
+        }
+        // out-of-project: only explicit path patterns apply (bare "Read"/"Edit" is ignored)
+        for (const entry of allowedTools) {
+          if (entry.startsWith(toolName + "(")) {
+            const pattern = entry.substring(toolName.length + 1, entry.length - 1);
+            if (matchesGlob(command, pattern)) return true;
+          }
+        }
+        return false;
+      }
+
       for (const entry of allowedTools) {
         if (entry === toolName) return true;
         if (entry.startsWith(toolName + "(")) return true;

@@ -2,7 +2,7 @@ import { useRef, useCallback, useState, useEffect } from "react";
 import type { Emotion } from "../types/emotion";
 import { NOTIFICATION_EMOTIONS, getRandomPhrase, type CustomPhrases } from "../constants/notificationPhrases";
 
-const COOLDOWN_MS = 30_000;
+const CONSECUTIVE_WINDOW_MS = 30_000;
 const AUTO_DISMISS_MS = 8_000;
 const POPUP_SHOW_DELAY_MS = 300;
 
@@ -11,6 +11,7 @@ export type PopupState = "hidden" | "entering" | "visible" | "exiting";
 interface PendingNotification {
   emotion: Emotion;
   phrase: string;
+  shouldSpeak: boolean;
 }
 
 interface UseNotificationPopupOptions {
@@ -30,7 +31,7 @@ export function useNotificationPopup({ onTrigger, onWebhookNotify, webhookEnable
   const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const popupDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const triggerPopupRef = useRef<((emotion: Emotion, phrase: string) => void) | null>(null);
+  const triggerPopupRef = useRef<((emotion: Emotion, phrase: string, shouldSpeak: boolean) => void) | null>(null);
   const showPopupRef = useRef(showPopup);
   const playSpeechRef = useRef(playSpeech);
   useEffect(() => { showPopupRef.current = showPopup; }, [showPopup]);
@@ -47,16 +48,16 @@ export function useNotificationPopup({ onTrigger, onWebhookNotify, webhookEnable
       const next = pendingRef.current;
       pendingRef.current = null;
       if (next) {
-        triggerPopupRef.current?.(next.emotion, next.phrase);
+        triggerPopupRef.current?.(next.emotion, next.phrase, next.shouldSpeak);
       }
     }, 600);
   }, []);
 
   const triggerPopup = useCallback(
-    (emotion: Emotion, phrase: string) => {
+    (emotion: Emotion, phrase: string, shouldSpeak: boolean) => {
       isActiveRef.current = true;
       cooldownMap.current.set(emotion, Date.now());
-      if (playSpeechRef.current) {
+      if (playSpeechRef.current && shouldSpeak) {
         onTrigger(phrase, emotion);
       }
       onWebhookNotify?.(phrase, emotion);
@@ -83,21 +84,22 @@ export function useNotificationPopup({ onTrigger, onWebhookNotify, webhookEnable
       if (!NOTIFICATION_EMOTIONS.has(emotion)) return;
 
       const lastFired = cooldownMap.current.get(emotion) ?? 0;
-      if (Date.now() - lastFired < COOLDOWN_MS) {
-        console.log(`[Popup] Cooldown active for ${emotion}, skipping`);
-        return;
+      const isConsecutive = Date.now() - lastFired < CONSECUTIVE_WINDOW_MS;
+      const shouldSpeak = !isConsecutive;
+      if (isConsecutive) {
+        console.log(`[Popup] Consecutive fire for ${emotion}, popup only (no speech)`);
       }
 
       const phrase = getRandomPhrase(emotion, customPhrases ?? undefined);
       if (!phrase) return;
 
       if (isActiveRef.current) {
-        pendingRef.current = { emotion, phrase };
+        pendingRef.current = { emotion, phrase, shouldSpeak };
         console.log(`[Popup] Active, queuing ${emotion}`);
         return;
       }
 
-      triggerPopup(emotion, phrase);
+      triggerPopup(emotion, phrase, shouldSpeak);
     },
     [showPopup, playSpeech, webhookEnabled, triggerPopup, customPhrases],
   );

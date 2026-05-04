@@ -18,7 +18,7 @@ function App() {
   const [volumeScale, setVolumeScale] = useState(1.0);
   const [imageUrl, setImageUrl] = useState<string>(DEFAULT_IMAGE_URL);
   const [containerSize, setContainerSize] = useState(200);
-  const [screenSize, setScreenSize] = useState({ width: 1920, height: 1080 });
+  const [screenSize, setScreenSize] = useState({ width: 1920, height: 1080, insets: { top: 0, bottom: 0, left: 0, right: 0 } });
   const [isInitialized, setIsInitialized] = useState(false);
   const [devToolsOpen, setDevToolsOpen] = useState(false);
   const [muteOnMicActive, setMuteOnMicActive] = useState(false);
@@ -281,6 +281,7 @@ function App() {
           animation={popupAnimation}
           direction={popupDirection}
           size={containerSize}
+          insets={screenSize.insets}
         />
       )}
 

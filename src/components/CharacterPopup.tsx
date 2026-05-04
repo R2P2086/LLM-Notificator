@@ -5,6 +5,8 @@ import type { PopupState } from "../hooks/useNotificationPopup";
 const POPUP_MARGIN = 20;
 const SPRING = "600ms cubic-bezier(0.34, 1.56, 0.64, 1)";
 
+interface Insets { top: number; bottom: number; left: number; right: number }
+
 interface Props {
   imageUrl: string;
   popupState: PopupState;
@@ -12,22 +14,27 @@ interface Props {
   animation: PopupAnimation;
   direction: PopupDirection;
   size: number;
+  insets: Insets;
 }
 
-function getPositionStyle(position: PopupPosition): React.CSSProperties {
+function getPositionStyle(position: PopupPosition, insets: Insets): React.CSSProperties {
   const m = POPUP_MARGIN;
+  const b = insets.bottom + m;
+  const t = insets.top + m;
+  const l = insets.left + m;
+  const r = insets.right + m;
   switch (position) {
-    case "bottom-center": return { bottom: m, left: 0, right: 0, display: "flex", justifyContent: "center" };
-    case "bottom-right":  return { bottom: m, right: m };
-    case "bottom-left":   return { bottom: m, left: m };
-    case "top-center":    return { top: m, left: 0, right: 0, display: "flex", justifyContent: "center" };
-    case "top-right":     return { top: m, right: m };
-    case "top-left":      return { top: m, left: m };
-    case "right-center":  return { right: m, top: 0, bottom: 0, display: "flex", alignItems: "center" };
-    case "left-center":   return { left: m, top: 0, bottom: 0, display: "flex", alignItems: "center" };
+    case "bottom-center": return { bottom: b, left: 0, right: 0, display: "flex", justifyContent: "center" };
+    case "bottom-right":  return { bottom: b, right: r };
+    case "bottom-left":   return { bottom: b, left: l };
+    case "top-center":    return { top: t, left: 0, right: 0, display: "flex", justifyContent: "center" };
+    case "top-right":     return { top: t, right: r };
+    case "top-left":      return { top: t, left: l };
+    case "right-center":  return { right: r, top: 0, bottom: 0, display: "flex", alignItems: "center" };
+    case "left-center":   return { left: l, top: 0, bottom: 0, display: "flex", alignItems: "center" };
   }
   // Unreachable but satisfies TS exhaustiveness
-  return { bottom: m, right: m };
+  return { bottom: b, right: r };
 }
 
 function getSlideOffset(position: PopupPosition, direction: PopupDirection): string {
@@ -106,25 +113,30 @@ function getAnimationStyle(
 export function computePopupRect(
   position: PopupPosition,
   size: number,
-  screen: { width: number; height: number },
+  screen: { width: number; height: number; insets: Insets },
 ): { x: number; y: number; w: number; h: number } {
   const m = POPUP_MARGIN;
+  const { width, height, insets } = screen;
+  const b = insets.bottom + m;
+  const t = insets.top + m;
+  const l = insets.left + m;
+  const r = insets.right + m;
   switch (position) {
-    case "bottom-center": return { x: screen.width / 2 - size / 2, y: screen.height - size - m, w: size, h: size };
-    case "bottom-right":  return { x: screen.width - size - m, y: screen.height - size - m, w: size, h: size };
-    case "bottom-left":   return { x: m, y: screen.height - size - m, w: size, h: size };
-    case "top-center":    return { x: screen.width / 2 - size / 2, y: m, w: size, h: size };
-    case "top-right":     return { x: screen.width - size - m, y: m, w: size, h: size };
-    case "top-left":      return { x: m, y: m, w: size, h: size };
-    case "right-center":  return { x: screen.width - size - m, y: screen.height / 2 - size / 2, w: size, h: size };
-    case "left-center":   return { x: m, y: screen.height / 2 - size / 2, w: size, h: size };
+    case "bottom-center": return { x: width / 2 - size / 2, y: height - b - size, w: size, h: size };
+    case "bottom-right":  return { x: width - r - size, y: height - b - size, w: size, h: size };
+    case "bottom-left":   return { x: l, y: height - b - size, w: size, h: size };
+    case "top-center":    return { x: width / 2 - size / 2, y: t, w: size, h: size };
+    case "top-right":     return { x: width - r - size, y: t, w: size, h: size };
+    case "top-left":      return { x: l, y: t, w: size, h: size };
+    case "right-center":  return { x: width - r - size, y: height / 2 - size / 2, w: size, h: size };
+    case "left-center":   return { x: l, y: height / 2 - size / 2, w: size, h: size };
   }
 }
 
-export default function CharacterPopup({ imageUrl, popupState, position, animation, direction, size }: Props) {
+export default function CharacterPopup({ imageUrl, popupState, position, animation, direction, size, insets }: Props) {
   const wrapperStyle: React.CSSProperties = {
     position: "absolute",
-    ...getPositionStyle(position),
+    ...getPositionStyle(position, insets),
     pointerEvents: popupState === "hidden" ? "none" : "auto",
     visibility: popupState === "hidden" ? "hidden" : "visible",
   };
