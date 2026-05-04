@@ -18,7 +18,6 @@ function App() {
   const [volumeScale, setVolumeScale] = useState(1.0);
   const [imageUrl, setImageUrl] = useState<string>(DEFAULT_IMAGE_URL);
   const [containerSize, setContainerSize] = useState(200);
-  const [screenSize, setScreenSize] = useState({ width: 1920, height: 1080, insets: { top: 0, bottom: 0, left: 0, right: 0 } });
   const [isInitialized, setIsInitialized] = useState(false);
   const [devToolsOpen, setDevToolsOpen] = useState(false);
   const [muteOnMicActive, setMuteOnMicActive] = useState(false);
@@ -33,32 +32,26 @@ function App() {
 
   const showSettingsRef = useRef(false);
   const containerSizeRef = useRef(containerSize);
-  const screenSizeRef = useRef(screenSize);
+  const screenSizeRef = useRef({ width: window.innerWidth || 1920, height: window.innerHeight || 1080 });
   const popupPositionRef = useRef(popupPosition);
   const popupStateActiveRef = useRef(false);
 
   useEffect(() => { showSettingsRef.current = showSettings; }, [showSettings]);
   useEffect(() => { containerSizeRef.current = containerSize; }, [containerSize]);
-  useEffect(() => { screenSizeRef.current = screenSize; }, [screenSize]);
   useEffect(() => { popupPositionRef.current = popupPosition; }, [popupPosition]);
 
-  // Initialize screen size and popup size from Electron Store
+  // Initialize character size from Electron Store
   useEffect(() => {
     const init = async () => {
       const electron = window.electron;
-      if (!electron?.getCharacterSize || !electron?.getScreenSize) {
+      if (!electron?.getCharacterSize) {
         setIsInitialized(true);
         return;
       }
-      const [savedSize, screen] = await Promise.all([
-        electron.getCharacterSize(),
-        electron.getScreenSize(),
-      ]);
+      const savedSize = await electron.getCharacterSize();
       const size = savedSize || 200;
       setContainerSize(size);
       containerSizeRef.current = size;
-      setScreenSize(screen);
-      screenSizeRef.current = screen;
       setIsInitialized(true);
     };
     init();
@@ -160,7 +153,9 @@ function App() {
     const cleanup = window.electron.onSpeak((message: string) => {
       try {
         const data = JSON.parse(message) as { type: string; text: string; emotion?: Emotion };
-        if (data.type === "speak") enqueue((data.emotion as Emotion) || "neutral");
+        if (data.type === "speak") {
+          enqueue((data.emotion as Emotion) || "neutral");
+        }
       } catch (err) {
         console.error("Failed to parse speak message:", err);
       }
@@ -281,7 +276,6 @@ function App() {
           animation={popupAnimation}
           direction={popupDirection}
           size={containerSize}
-          insets={screenSize.insets}
         />
       )}
 

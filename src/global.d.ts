@@ -15,7 +15,6 @@ declare global {
       getCharacterSize: () => Promise<number>;
       setCharacterSize: (size: number) => Promise<number>;
       resetCharacterSize: () => Promise<number>;
-      getScreenSize: () => Promise<{ width: number; height: number; insets: { top: number; bottom: number; left: number; right: number } }>;
       resetAllSettings: () => Promise<boolean>;
       getMicActive: () => Promise<boolean>;
       getMuteOnMicActive: () => Promise<boolean>;

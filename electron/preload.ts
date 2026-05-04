@@ -45,9 +45,6 @@ contextBridge.exposeInMainWorld("electron", {
   resetCharacterSize: (): Promise<number> => {
     return ipcRenderer.invoke("reset-character-size");
   },
-  getScreenSize: (): Promise<{ width: number; height: number; insets: { top: number; bottom: number; left: number; right: number } }> => {
-    return ipcRenderer.invoke("get-screen-size");
-  },
   resetAllSettings: (): Promise<boolean> => {
     return ipcRenderer.invoke("reset-all-settings");
   },

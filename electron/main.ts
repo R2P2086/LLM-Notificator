@@ -217,12 +217,9 @@ const getTrayIconPath = (): string => {
     : path.join(__dirname, "../resources/icons");
 
   if (process.platform === "darwin") {
-    // テンプレートアイコンがあればそれを使う（ダーク/ライトモード自動対応）
-    // ファイル名にTemplateを含めるとElectronが自動認識し、@2xも自動読み込み
-    const templatePath = path.join(iconsDir, "trayTemplate.png");
-    if (fs.existsSync(templatePath)) return templatePath;
-    // フォールバック: 既存アイコンを使用
-    return path.join(iconsDir, "icon.png");
+    // trayTemplate.png はElectronがテンプレート画像として処理し白く表示されるため
+    // カラーアイコン（tray.png）を使用する
+    return path.join(iconsDir, "tray.png");
   }
   // Windows: .ico、Linux: .png
   const ext = process.platform === "win32" ? "icon.ico" : "tray.png";
@@ -970,28 +967,6 @@ ipcMain.handle("reset-character-size", () => {
   return defaultSize;
 });
 
-// Screen size (returns the size of the display the window is currently on)
-ipcMain.handle("get-screen-size", () => {
-  const toResult = (db: Electron.Rectangle, wa: Electron.Rectangle) => ({
-    width: db.width,
-    height: db.height,
-    insets: {
-      top: wa.y - db.y,
-      bottom: db.y + db.height - (wa.y + wa.height),
-      left: wa.x - db.x,
-      right: db.x + db.width - (wa.x + wa.width),
-    },
-  });
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    const bounds = mainWindow.getBounds();
-    const centerX = bounds.x + Math.round(bounds.width / 2);
-    const centerY = bounds.y + Math.round(bounds.height / 2);
-    const display = screen.getDisplayNearestPoint({ x: centerX, y: centerY });
-    return toResult(display.bounds, display.workArea);
-  }
-  const { bounds, workArea } = screen.getPrimaryDisplay();
-  return toResult(bounds, workArea);
-});
 
 // Active session filter
 ipcMain.handle("get-active-session", () => {
