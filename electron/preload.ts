@@ -45,7 +45,7 @@ contextBridge.exposeInMainWorld("electron", {
   resetCharacterSize: (): Promise<number> => {
     return ipcRenderer.invoke("reset-character-size");
   },
-  getScreenSize: (): Promise<{ width: number; height: number }> => {
+  getScreenSize: (): Promise<{ width: number; height: number; insets: { top: number; bottom: number; left: number; right: number } }> => {
     return ipcRenderer.invoke("get-screen-size");
   },
   resetAllSettings: (): Promise<boolean> => {
@@ -65,6 +65,9 @@ contextBridge.exposeInMainWorld("electron", {
   },
   getMicMonitorAvailable: (): Promise<boolean> => {
     return ipcRenderer.invoke("get-mic-monitor-available");
+  },
+  getVoiceroidBridgeAvailable: (): Promise<boolean> => {
+    return ipcRenderer.invoke("get-voiceroid-bridge-available");
   },
   getIncludeSubAgents: (): Promise<boolean> => {
     return ipcRenderer.invoke("get-include-sub-agents");

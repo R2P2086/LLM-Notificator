@@ -177,8 +177,8 @@ export default function SettingsPanel({
         const effectiveEngineType = savedEngineType || "aivis";
         setEngineType(effectiveEngineType);
         setCustomPath(savedCustomPath || "");
-        if (effectiveEngineType !== "custom" && window.electron?.getDefaultEnginePath) {
-          const path = await window.electron.getDefaultEnginePath(effectiveEngineType);
+        if (effectiveEngineType !== "custom" && effectiveEngineType !== "voiceroid2" && window.electron?.getDefaultEnginePath) {
+          const path = await window.electron.getDefaultEnginePath(effectiveEngineType as "aivis" | "voicevox");
           setDefaultEnginePath(path);
         }
       }
@@ -246,8 +246,8 @@ export default function SettingsPanel({
 
   const handleEngineTypeChange = async (newEngineType: EngineType) => {
     setEngineType(newEngineType);
-    if (newEngineType !== "custom" && window.electron?.getDefaultEnginePath) {
-      const path = await window.electron.getDefaultEnginePath(newEngineType);
+    if (newEngineType !== "custom" && newEngineType !== "voiceroid2" && window.electron?.getDefaultEnginePath) {
+      const path = await window.electron.getDefaultEnginePath(newEngineType as "aivis" | "voicevox");
       setDefaultEnginePath(path);
     }
     if (newEngineType === "custom" && !customPath.trim()) { setSpeakers([]); setLoadingSpeakers(false); return; }
@@ -459,26 +459,32 @@ export default function SettingsPanel({
               <section className={`${sectionCls} space-y-4`}>
                 <h2 className={sectionHeadingCls}>エンジン</h2>
                 <div className="flex flex-col gap-2">
-                  {(["aivis", "voicevox", "custom"] as EngineType[]).map((type) => (
+                  {(["aivis", "voicevox", "voiceroid2", "custom"] as EngineType[]).map((type) => (
                     <label key={type} className="flex items-center gap-2 cursor-pointer text-sm text-stone-800 dark:text-zinc-100">
                       <input type="radio" name="engineType" value={type} checked={engineType === type}
                         onChange={() => handleEngineTypeChange(type)} className="w-4 h-4 m-0 cursor-pointer accent-orange-500" />
-                      <span>{type === "aivis" ? "AivisSpeech" : type === "voicevox" ? "VOICEVOX" : "カスタム"}</span>
+                      <span>{type === "aivis" ? "AivisSpeech" : type === "voicevox" ? "VOICEVOX" : type === "voiceroid2" ? "VOICEROID2" : "カスタム"}</span>
                     </label>
                   ))}
                 </div>
-                <div className="flex gap-2 items-center">
-                  <input type="text" value={engineType === "custom" ? customPath : defaultEnginePath}
-                    onChange={(e) => setCustomPath(e.target.value)} disabled={engineType !== "custom"}
-                    placeholder={engineType === "custom" ? "カスタムエンジンパスを入力" : ""}
-                    className={`flex-1 ${inputCls} font-mono disabled:bg-stone-100 dark:disabled:bg-zinc-700 disabled:text-stone-400 disabled:cursor-not-allowed`} />
-                  {engineType === "custom" && (
-                    <button type="button" onClick={() => restartEngine("custom", customPath.trim())}
-                      className="btn-gradient px-5 py-2 rounded-full text-sm font-medium whitespace-nowrap" disabled={loadingSpeakers}>
-                      確定
-                    </button>
-                  )}
-                </div>
+                {engineType === "voiceroid2" ? (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 m-0">
+                    VOICEROID2 エディターを起動してから使用してください（自動起動には対応していません）
+                  </p>
+                ) : (
+                  <div className="flex gap-2 items-center">
+                    <input type="text" value={engineType === "custom" ? customPath : defaultEnginePath}
+                      onChange={(e) => setCustomPath(e.target.value)} disabled={engineType !== "custom"}
+                      placeholder={engineType === "custom" ? "カスタムエンジンパスを入力" : ""}
+                      className={`flex-1 ${inputCls} font-mono disabled:bg-stone-100 dark:disabled:bg-zinc-700 disabled:text-stone-400 disabled:cursor-not-allowed`} />
+                    {engineType === "custom" && (
+                      <button type="button" onClick={() => restartEngine("custom", customPath.trim())}
+                        className="btn-gradient px-5 py-2 rounded-full text-sm font-medium whitespace-nowrap" disabled={loadingSpeakers}>
+                        確定
+                      </button>
+                    )}
+                  </div>
+                )}
                 {error && <p className="text-sm text-danger m-0">{error}</p>}
               </section>
 
@@ -489,7 +495,7 @@ export default function SettingsPanel({
                 ) : speakers.length > 0 ? (
                   <select value={speakerId} onChange={(e) => handleSpeakerChange(Number(e.target.value))}
                     className={`w-full ${inputCls}`}>
-                    {speakers.map((s) => <option key={s.id} value={s.id}>{s.speakerName} - {s.name}</option>)}
+                    {speakers.map((s) => <option key={s.id} value={s.id}>{s.speakerName}{s.name ? ` - ${s.name}` : ""}</option>)}
                   </select>
                 ) : (
                   <p className={`text-sm m-0 ${mutedCls}`}>エンジンが実行されていますか?</p>

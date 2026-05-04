@@ -1,6 +1,6 @@
 export {};
 
-export type EngineType = "aivis" | "voicevox" | "custom";
+export type EngineType = "aivis" | "voicevox" | "custom" | "voiceroid2";
 
 declare global {
   interface Window {
@@ -15,12 +15,13 @@ declare global {
       getCharacterSize: () => Promise<number>;
       setCharacterSize: (size: number) => Promise<number>;
       resetCharacterSize: () => Promise<number>;
-      getScreenSize: () => Promise<{ width: number; height: number }>;
+      getScreenSize: () => Promise<{ width: number; height: number; insets: { top: number; bottom: number; left: number; right: number } }>;
       resetAllSettings: () => Promise<boolean>;
       getMicActive: () => Promise<boolean>;
       getMuteOnMicActive: () => Promise<boolean>;
       setMuteOnMicActive: (value: boolean) => Promise<boolean>;
       getDefaultEnginePath: (engineType: "aivis" | "voicevox") => Promise<string>;
+      getVoiceroidBridgeAvailable: () => Promise<boolean>;
       getMicMonitorAvailable: () => Promise<boolean>;
       getIncludeSubAgents: () => Promise<boolean>;
       setIncludeSubAgents: (value: boolean) => Promise<boolean>;

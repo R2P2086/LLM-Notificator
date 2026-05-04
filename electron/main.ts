@@ -41,6 +41,7 @@ let settingsMonitor: { isToolAllowed: (name: string) => boolean; close: () => vo
 let activeSessionId: string | null = null;
 let activeCodexFilePath: string | null = null;
 let voicevoxProcess: ChildProcess | null = null;
+let voiceroidBridgeProcess: ChildProcess | null = null;
 let micMonitorProcess: ChildProcess | null = null;
 let micActive = false;
 let tray: Tray | null = null;
@@ -318,23 +319,36 @@ const createTray = () => {
 };
 
 // Engine type and path constants
-type EngineType = "aivis" | "voicevox" | "custom";
+type EngineType = "aivis" | "voicevox" | "custom" | "voiceroid2";
+type VoicevoxEngineType = "aivis" | "voicevox";
 
-// Platform-specific engine paths
-const MAC_ENGINE_PATHS: Record<Exclude<EngineType, "custom">, string> = {
+// Platform-specific engine paths (aivis / voicevox only; voiceroid2 uses the bundled bridge)
+const MAC_ENGINE_PATHS: Record<VoicevoxEngineType, string> = {
   aivis: "/Applications/AivisSpeech.app/Contents/Resources/AivisSpeech-Engine/run",
   voicevox: "/Applications/VOICEVOX.app/Contents/Resources/vv-engine/run",
 };
 
-const WINDOWS_ENGINE_PATHS: Record<Exclude<EngineType, "custom">, string> = {
+const WINDOWS_ENGINE_PATHS: Record<VoicevoxEngineType, string> = {
   aivis: "C:\\Program Files\\AivisSpeech\\AivisSpeech-Engine\\run.exe",
   voicevox: "C:\\Program Files\\VOICEVOX\\vv-engine\\run.exe",
 };
 
-const LINUX_ENGINE_PATHS: Record<Exclude<EngineType, "custom">, string> = {
+const LINUX_ENGINE_PATHS: Record<VoicevoxEngineType, string> = {
   aivis: "/opt/AivisSpeech/AivisSpeech-Engine/run",
   voicevox: "/opt/VOICEVOX/vv-engine/run",
 };
+
+// Get voiceroid-bridge.exe path (bundled binary, Windows-only)
+function getVoiceroidBridgePath(): string | undefined {
+  if (process.platform !== "win32") return undefined;
+  const binaryName = "voiceroid-bridge.exe";
+  const devPath = path.join(__dirname, "../resources", binaryName);
+  if (app.isPackaged) {
+    const prodPath = path.join(process.resourcesPath, binaryName);
+    return fs.existsSync(prodPath) ? prodPath : undefined;
+  }
+  return fs.existsSync(devPath) ? devPath : undefined;
+}
 
 // Get the actual engine path based on engine type and platform
 function getEnginePath(): string | undefined {
@@ -345,9 +359,12 @@ function getEnginePath(): string | undefined {
     console.log(`[getEnginePath] Custom path: ${customPath}`);
     return customPath;
   }
+  if (engineType === "voiceroid2") {
+    return getVoiceroidBridgePath();
+  }
 
   // Select path based on platform
-  let enginePaths: Record<Exclude<EngineType, "custom">, string>;
+  let enginePaths: Record<VoicevoxEngineType, string>;
   if (process.platform === "win32") {
     enginePaths = WINDOWS_ENGINE_PATHS;
   } else if (process.platform === "darwin") {
@@ -356,7 +373,7 @@ function getEnginePath(): string | undefined {
     enginePaths = LINUX_ENGINE_PATHS;
   }
 
-  const path = enginePaths[engineType];
+  const path = enginePaths[engineType as VoicevoxEngineType];
   console.log(`[getEnginePath] Predefined path for ${engineType}: ${path}`);
   return path;
 }
@@ -374,9 +391,79 @@ async function isPortInUse(port: number): Promise<boolean> {
   });
 }
 
+// Start voiceroid-bridge.exe (Windows-only, serves on VOICEVOX_PORT)
+async function startVoiceroidBridge(isRestart = false): Promise<boolean> {
+  const bridgePath = getVoiceroidBridgePath();
+  if (!bridgePath) {
+    console.log("[VoiceroidBridge] Binary not found, feature unavailable");
+    return false;
+  }
+
+  const portInUse = await isPortInUse(VOICEVOX_PORT);
+  if (portInUse) {
+    if (isRestart) {
+      console.log(`[VoiceroidBridge] Port ${VOICEVOX_PORT} still in use, waiting for release...`);
+      const released = await waitForPortRelease(VOICEVOX_PORT);
+      if (!released) {
+        console.error(`[VoiceroidBridge] Port ${VOICEVOX_PORT} was not released in time`);
+        return false;
+      }
+    } else {
+      console.log(`[VoiceroidBridge] Port ${VOICEVOX_PORT} already in use, skipping`);
+      return false;
+    }
+  }
+
+  try {
+    console.log(`[VoiceroidBridge] Starting: ${bridgePath}`);
+    voiceroidBridgeProcess = spawn(bridgePath, ["--port", String(VOICEVOX_PORT)]);
+
+    voiceroidBridgeProcess.stderr?.on("data", (data) => {
+      console.log(`[VoiceroidBridge] ${data.toString().trim()}`);
+    });
+    voiceroidBridgeProcess.stdout?.on("data", (data) => {
+      console.log(`[VoiceroidBridge] ${data.toString().trim()}`);
+    });
+    voiceroidBridgeProcess.on("error", (error) => {
+      console.error("[VoiceroidBridge] Failed to start:", error);
+      voiceroidBridgeProcess = null;
+    });
+    voiceroidBridgeProcess.on("exit", (code) => {
+      console.log(`[VoiceroidBridge] Exited with code ${code}`);
+      voiceroidBridgeProcess = null;
+    });
+
+    console.log(`[VoiceroidBridge] Started on port ${VOICEVOX_PORT}`);
+    return true;
+  } catch (error) {
+    console.error("[VoiceroidBridge] Error starting:", error);
+    voiceroidBridgeProcess = null;
+    return false;
+  }
+}
+
+// Stop voiceroid-bridge.exe
+function stopVoiceroidBridge(): void {
+  if (voiceroidBridgeProcess) {
+    console.log("[VoiceroidBridge] Stopping...");
+    if (process.platform === "win32" && voiceroidBridgeProcess.pid) {
+      killProcessTree(voiceroidBridgeProcess.pid);
+    } else {
+      voiceroidBridgeProcess.kill("SIGTERM");
+    }
+    voiceroidBridgeProcess = null;
+  }
+}
+
 // Start VOICEVOX Engine
 // isRestart=true の場合、ポート解放をリトライで待つ（エンジン切替時用）
 async function startVoicevoxEngine(isRestart = false): Promise<boolean> {
+  // voiceroid2 uses the bundled bridge instead of a VOICEVOX-style engine
+  const engineType = (store.get("engineType") as EngineType | undefined) || "aivis";
+  if (engineType === "voiceroid2") {
+    return startVoiceroidBridge(isRestart);
+  }
+
   const voicevoxPath = getEnginePath();
 
   if (!voicevoxPath) {
@@ -461,6 +548,9 @@ function killProcessTree(pid: number): void {
 
 // Stop VOICEVOX Engine
 async function stopVoicevoxEngine(): Promise<void> {
+  // Also stop bridge if it's running (voiceroid2 mode)
+  stopVoiceroidBridge();
+
   if (voicevoxProcess) {
     console.log("[Engine] Stopping engine...");
     const proc = voicevoxProcess;
@@ -882,16 +972,25 @@ ipcMain.handle("reset-character-size", () => {
 
 // Screen size (returns the size of the display the window is currently on)
 ipcMain.handle("get-screen-size", () => {
+  const toResult = (db: Electron.Rectangle, wa: Electron.Rectangle) => ({
+    width: db.width,
+    height: db.height,
+    insets: {
+      top: wa.y - db.y,
+      bottom: db.y + db.height - (wa.y + wa.height),
+      left: wa.x - db.x,
+      right: db.x + db.width - (wa.x + wa.width),
+    },
+  });
   if (mainWindow && !mainWindow.isDestroyed()) {
     const bounds = mainWindow.getBounds();
     const centerX = bounds.x + Math.round(bounds.width / 2);
     const centerY = bounds.y + Math.round(bounds.height / 2);
     const display = screen.getDisplayNearestPoint({ x: centerX, y: centerY });
-    const { width, height } = display.bounds;
-    return { width, height };
+    return toResult(display.bounds, display.workArea);
   }
-  const { width, height } = screen.getPrimaryDisplay().bounds;
-  return { width, height };
+  const { bounds, workArea } = screen.getPrimaryDisplay();
+  return toResult(bounds, workArea);
 });
 
 // Active session filter
@@ -970,20 +1069,19 @@ ipcMain.handle("set-mute-on-mic-active", (_event, value: boolean) => {
   return true;
 });
 
-ipcMain.handle("get-default-engine-path", (_event, engineType: Exclude<EngineType, "custom">) => {
-  let enginePaths: Record<Exclude<EngineType, "custom">, string>;
-  if (process.platform === "win32") {
-    enginePaths = WINDOWS_ENGINE_PATHS;
-  } else if (process.platform === "darwin") {
-    enginePaths = MAC_ENGINE_PATHS;
-  } else {
-    enginePaths = LINUX_ENGINE_PATHS;
-  }
-  return enginePaths[engineType];
+ipcMain.handle("get-default-engine-path", (_event, engineType: VoicevoxEngineType) => {
+  const enginePaths = process.platform === "win32" ? WINDOWS_ENGINE_PATHS
+    : process.platform === "darwin" ? MAC_ENGINE_PATHS
+    : LINUX_ENGINE_PATHS;
+  return enginePaths[engineType] ?? "";
 });
 
 ipcMain.handle("get-mic-monitor-available", () => {
   return getMicMonitorPath() !== undefined;
+});
+
+ipcMain.handle("get-voiceroid-bridge-available", () => {
+  return getVoiceroidBridgePath() !== undefined;
 });
 
 ipcMain.handle("get-include-sub-agents", () => {
