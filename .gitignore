@@ -31,6 +31,13 @@ resources/mic-monitor
 resources/mic-monitor.exe
 mic-monitor.obj
 
+# VOICEROID2 bridge (built via build:voiceroid-bridge)
+resources/voiceroid-bridge.exe
+resources/*_voiceroid-bridge.exe
+
+# Third-party DLL (reference only, not distributed)
+resources/Plugin_VoiceroidTalkPlus.dll
+
 # Claude Code / local tools
 .claude/
 plugin/
