@@ -85,8 +85,8 @@ export function useNotificationPopup({ onTrigger, onWebhookNotify, webhookEnable
 
       const lastFired = cooldownMap.current.get(emotion) ?? 0;
       const isConsecutive = Date.now() - lastFired < CONSECUTIVE_WINDOW_MS;
-      const shouldSpeak = !isConsecutive;
-      if (isConsecutive) {
+      const shouldSpeak = emotion === "happy" || !isConsecutive;
+      if (isConsecutive && !shouldSpeak) {
         console.log(`[Popup] Consecutive fire for ${emotion}, popup only (no speech)`);
       }
 
